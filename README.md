@@ -4,6 +4,10 @@ Bu prototip, sahte veya uygulamadan dışa aktarılmış JSONL / Apache-Nginx co
 
 ## Çalıştırma
 
+Windows'ta projeyi test etmek için `run.bat` dosyasına çift tıklayın. Sunucu ayrı bir pencerede açılır; arayüz varsayılan tarayıcıda `http://127.0.0.1:8000/` adresinde yüklenir. Sunucuyu kapatmak için açılan sunucu penceresini kapatın.
+
+Elle çalıştırmak için proje kökünde:
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -11,7 +15,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-Arayüz `http://127.0.0.1:8000/`, API dokümantasyonu `http://127.0.0.1:8000/docs` adresindedir. Uygulama başlarken SQLite tablolarını ve `admin`, `analyst`, `viewer` rol kayıtlarını oluşturur. Log izleyici `logs` klasörünü her 5 saniyede bir tarar; yeni ve tamamlanmış `.log` / `.jsonl` satırlarını bir kez işler. Klasöre dosya yazan log forwarder/RPA işlemi, uygulamaya otomatik dosya tabanlı kaynak sağlayabilir.
+Arayüz `http://127.0.0.1:8000/`, API dokümantasyonu `http://127.0.0.1:8000/docs` adresindedir. Uygulama başlarken SQLite tablolarını ve `admin`, `analyst`, `viewer` rol kayıtlarını oluşturur. Eski prototip veritabanını da kayıtları silmeden yeni sütunlara yükseltir. Demo logları başlangıçta bir kez içe aktarılır ve canlı olay akışı sayfa açıldığında veritabanından doldurulur. Ekrandaki **Demo Logları Yükle** düğmesi demo dosyasını tekrar tarar; daha önce yüklenmiş satırlar tekrar eklenmez. Log izleyici `logs` klasörünü her 5 saniyede bir tarar; yeni ve tamamlanmış `.log` / `.jsonl` satırlarını bir kez işler. Klasöre dosya yazan log forwarder/RPA işlemi, uygulamaya otomatik dosya tabanlı kaynak sağlayabilir.
 
 İzleme yolu ve tarama/rate-limit eşikleri ortam değişkenleriyle değiştirilebilir:
 
@@ -21,7 +25,7 @@ Arayüz `http://127.0.0.1:8000/`, API dokümantasyonu `http://127.0.0.1:8000/doc
 | `LOG_POLL_INTERVAL_SECONDS` | `5` | Tarama aralığı |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | İstek sayım penceresi |
 | `RATE_LIMIT_MAX_REQUESTS` | `20` | Aynı IP için pencere içindeki izin verilen istek sayısı |
-| `DATABASE_URL` | `sqlite:///./threat_hunter.db` | SQLAlchemy veritabanı bağlantısı |
+| `DATABASE_URL` | Proje klasöründeki `threat_hunter.db` | SQLAlchemy veritabanı bağlantısı |
 
 Bir IP aynı zaman penceresinde eşiği aşarsa aşan istek alarm üretir. HTTP 429, 403, bilinen zararlı payload imzaları ve yaygın SQL/veritabanı hata metinleri de ayrıca tespit edilir. Logların zaman damgaları oran hesabında kullanılır.
 

@@ -18,12 +18,12 @@
     <div class="main-content">
         <div class="header-bar">
             <h2>API Güvenlik İzleme (SOC) Merkezi</h2>
-            <span class="status-badge">🟢 Motor Çevrimiçi</span>
+            <span class="status-badge" id="status-badge">🟡 Backend bağlanıyor</span>
         </div>
         
         <div class="stats-grid">
             <div class="stat-card">
-                <span style="color: var(--text-muted); font-size: 0.85rem;">İNCELELEN LOG</span>
+                <span style="color: var(--text-muted); font-size: 0.85rem;">İNCELENEN LOG</span>
                 <span class="stat-value" id="count-total">0</span>
             </div>
             <div class="stat-card">
@@ -40,7 +40,10 @@
         <div id="view-live" class="view-section active">
             <div class="content-grid">
                 <div class="panel">
-                    <div class="panel-header">📥 Log Enjeksiyon Portu</div>
+                    <div class="panel-header">
+                        <span>📥 Log Enjeksiyon Portu</span>
+                        <button class="btn-outline btn-small" onclick="loadDemoLogs()">🧪 Demo Logları Yükle</button>
+                    </div>
                     <label for="fileInput" class="file-upload-wrapper">
                         <div style="font-size: 24px; margin-bottom: 10px;">📂</div>
                         <div style="font-weight: bold;">JSON veya Sunucu Log Dosyası Yükle</div>
@@ -59,7 +62,7 @@
                     </div>
                     <div class="log-history" id="resultBox">
                         <div style="color: var(--text-muted); text-align: center; margin-top: 80px; font-style: italic;" id="empty-state">
-                            Sistem log alımına hazır...
+                            Demo logları hazırlanıyor...
                         </div>
                     </div>
                 </div>
@@ -94,7 +97,7 @@
         <!-- 3. SEKME: KURAL MOTORU EKRANI -->
         <div id="view-rules" class="view-section">
             <div class="panel" style="flex: 1;">
-                <div class="panel-header">⚙️ WAF ve Kural Motoru Yapılandırması</div>
+                <div class="panel-header">⚙️ Tespit Kural Motoru</div>
                 <div style="color: var(--text-muted); margin-bottom: 20px;">
                     Sistemin tehdit algılama mekanizmasını buradan yönetebilirsiniz. Eklenen imzalar mevcut sunucu oturumu boyunca etkin olur; tek başına isteği engellemez.
                 </div>
