@@ -1,0 +1,8 @@
+{
+  "timestamp": "2026-10-02T19:20:00",
+  "source_ip": "192.168.1.105",
+  "endpoint": "/api/v1/ping",
+  "http_method": "POST",
+  "status_code": 200,
+  "payload_data": "{\"ip_address\": \"127.0.0.1 ; ls -la\"}"
+}

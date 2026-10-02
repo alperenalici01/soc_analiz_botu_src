@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Spor Şimdi - SIEM Güvenlik Paneli</title>
+    <!-- Stil dosyamızı (CSS) dışarıdan çağırıyoruz -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="sidebar-logo">🛡️ ThreatBot v2.0</div>
+        <div class="nav-item active" id="menu-live" onclick="switchTab('live')">📊 Canlı Analiz Paneli</div>
+        <div class="nav-item" id="menu-db" onclick="switchTab('db')">📜 Geçmiş Kayıtlar (DB)</div>
+        <div class="nav-item" id="menu-rules" onclick="switchTab('rules')">⚙️ Kural Motoru Ayarları</div>
+    </div>
+
+    <div class="main-content">
+        <div class="header-bar">
+            <h2>API Güvenlik İzleme (SOC) Merkezi</h2>
+            <span class="status-badge">🟢 Motor Çevrimiçi</span>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span style="color: var(--text-muted); font-size: 0.85rem;">İNCELELEN LOG</span>
+                <span class="stat-value" id="count-total">0</span>
+            </div>
+            <div class="stat-card">
+                <span style="color: var(--danger); font-size: 0.85rem;">BLOKLANAN TEHDİT</span>
+                <span class="stat-value" id="count-threats" style="color: var(--danger);">0</span>
+            </div>
+            <div class="stat-card">
+                <span style="color: var(--accent); font-size: 0.85rem;">AKTİF SENSÖR</span>
+                <span class="stat-value" style="color: var(--accent);">WAF Aktif</span>
+            </div>
+        </div>
+
+        <!-- 1. SEKME: CANLI ANALİZ EKRANI -->
+        <div id="view-live" class="view-section active">
+            <div class="content-grid">
+                <div class="panel">
+                    <div class="panel-header">📥 Log Enjeksiyon Portu</div>
+                    <label for="fileInput" class="file-upload-wrapper">
+                        <div style="font-size: 24px; margin-bottom: 10px;">📂</div>
+                        <div style="font-weight: bold;">Çoklu JSON Log Dosyası Yükle</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 5px;">Birden fazla log içeren .json dosyanızı seçin</div>
+                        <input type="file" id="fileInput" accept=".json">
+                    </label>
+                    <div style="text-align: center; color: var(--text-muted); margin-bottom: 15px; font-size: 0.9rem;">— VEYA MANUEL YAPIŞTIR —</div>
+                    <textarea id="logInput" placeholder="Tekil JSON verisini buraya yapıştırın..."></textarea>
+                    <button id="analyzeBtn" onclick="analyzeManualData()">🚀 MANUEL ANALİZİ TETİKLE</button>
+                </div>
+                
+                <div class="panel">
+                    <div class="panel-header">
+                        <span>📡 Gerçek Zamanlı Olay Akışı</span>
+                        <button class="btn-outline btn-small" onclick="clearStream()">🧹 Akışı Temizle</button>
+                    </div>
+                    <div class="log-history" id="resultBox">
+                        <div style="color: var(--text-muted); text-align: center; margin-top: 80px; font-style: italic;" id="empty-state">
+                            Sistem log alımına hazır...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. SEKME: VERİTABANI GEÇMİŞİ EKRANI -->
+        <div id="view-db" class="view-section">
+            <div class="panel" style="flex: 1; display: flex; flex-direction: column;">
+                <div class="panel-header">
+                    <span>🗄️ Veritabanı Kayıtları (Son 50 İşlem)</span>
+                    <button class="btn-outline btn-small" onclick="fetchLogsFromDB()">🔄 Tabloyu Yenile</button>
+                </div>
+                <div class="table-container">
+                    <table id="dbTable">
+                        <thead>
+                            <tr>
+                                <th>Tarih/Saat</th>
+                                <th>Kaynak IP</th>
+                                <th>Hedef Metot</th>
+                                <th>Durum Kodu</th>
+                                <th>Sonuç</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dbTableBody">
+                            <tr><td colspan="5" style="text-align:center; padding: 30px;">Veriler yükleniyor...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <!-- 3. SEKME: KURAL MOTORU EKRANI -->
+        <div id="view-rules" class="view-section">
+            <div class="panel" style="flex: 1;">
+                <div class="panel-header">⚙️ WAF ve Kural Motoru Yapılandırması</div>
+                <div style="color: var(--text-muted); margin-bottom: 20px;">
+                    Sistemin tehdit algılama mekanizmasını (Detection Engine) buradan yönetebilirsiniz. Yeni zararlı payload imzaları ekleyerek botun sıfırıncı gün (0-day) zafiyetlerini yakalama kapasitesini artırın.
+                </div>
+                
+                <div style="display: flex; gap: 15px; margin-bottom: 25px;">
+                    <input type="text" id="newSignatureInput" placeholder="Örn: <script> veya UNION SELECT..." style="flex: 1; background: #0b1120; color: #a5b4fc; border: 1px solid var(--border); padding: 12px; border-radius: 6px; font-family: monospace;">
+                    <button style="width: auto; margin: 0; padding: 12px 25px;" onclick="addNewSignature()">➕ Yeni İmza Ekle</button>
+                </div>
+
+                <div class="table-container">
+                    <table id="rulesTable">
+                        <thead>
+                            <tr>
+                                <th style="width: 50px;">#</th>
+                                <th>Zararlı Tehdit İmzası (Payload String)</th>
+                                <th>Koruma Durumu</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rulesTableBody">
+                            <tr><td colspan="3" style="text-align:center; padding: 30px;">Kurallar yükleniyor...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- İş Mantığı (JavaScript) dosyamızı dışarıdan çağırıyoruz -->
+    <script src="/static/script.js"></script>
+</body>
+</html>
