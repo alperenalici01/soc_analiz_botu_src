@@ -1,20 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from models.schemas import APILogCreate
-from models.database import SessionLocal, APILog, SecurityAlert
-from core.rule_engine import analyze_log
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from models.schemas import APILogCreate
-from models.database import SessionLocal, APILog, SecurityAlert
-from core.rule_engine import analyze_log
-import core.rule_engine as rule_engine # Kural listesine erişmek için
-from pydantic import BaseModel # Kural ekleme şeması için
+from typing import Optional
 
-# API rotalarımızı yönetecek nesne
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session, selectinload
+
+from core import rule_engine
+from core.ingestion import ingest_log
+from core.log_parser import parse_log_line
+from models.database import APILog, SecurityAlert, SessionLocal
+from models.schemas import APILogCreate, TextLogIngest
+
+
 router = APIRouter()
 
-# Veritabanı oturumu (session) açmak ve kapatmak için yardımcı fonksiyon
+
 def get_db():
     db = SessionLocal()
     try:
@@ -22,81 +21,120 @@ def get_db():
     finally:
         db.close()
 
-# 1. MEVCUT ROTAMIZ: Yeni gelen logları analiz eder ve veritabanına yazar (POST)
+
+def _persist_log(db: Session, log_data: APILogCreate, raw_line: Optional[str] = None):
+    result = ingest_log(db, log_data, raw_line=raw_line)
+    db.commit()
+    return result
+
+
 @router.post("/analyze-log/")
 def process_api_log(log_data: APILogCreate, db: Session = Depends(get_db)):
-    threat_found, threat_type, severity = analyze_log(log_data)
-
-    new_log = APILog(
-        timestamp=log_data.timestamp,
-        source_ip=log_data.source_ip,
-        endpoint=log_data.endpoint,
-        http_method=log_data.http_method,
-        status_code=log_data.status_code,
-        payload_data=log_data.payload_data
+    result = _persist_log(db, log_data)
+    result["message"] = (
+        "Tehdit tespit edildi ve veritabanına kaydedildi."
+        if result["alerts"]
+        else "Log temiz, herhangi bir anormallik bulunmadı."
     )
-    db.add(new_log)
-    db.commit()
-    db.refresh(new_log) 
+    return result
 
-    if threat_found:
-        new_alert = SecurityAlert(
-            log_id=new_log.log_id, 
-            alert_type=threat_type,
-            severity_level=severity
-        )
-        db.add(new_alert)
-        db.commit()
-        db.refresh(new_alert)
-        
-        return {
-            "status": "danger",
-            "message": "Tehdit tespit edildi ve veritabanına kaydedildi!",
-            "alert_details": {
-                "alert_id": new_alert.alert_id,
-                "type": threat_type,
-                "severity": severity
-            }
+
+@router.post("/ingest-text/")
+def ingest_text_logs(request: TextLogIngest, db: Session = Depends(get_db)):
+    results = []
+    errors = []
+    for line_number, raw_line in enumerate(request.content.splitlines(), start=1):
+        if not raw_line.strip():
+            continue
+        try:
+            log_data = parse_log_line(raw_line)
+        except (ValueError, TypeError) as error:
+            errors.append({"line": line_number, "error": str(error)})
+            continue
+        result = ingest_log(db, log_data, raw_line=raw_line)
+        result["log"] = {
+            "timestamp": log_data.timestamp.isoformat(),
+            "source_ip": log_data.source_ip,
+            "endpoint": log_data.endpoint,
+            "http_method": log_data.http_method,
+            "status_code": log_data.status_code,
+            "payload_data": log_data.payload_data,
         }
-
+        results.append(result)
+    db.commit()
     return {
-        "status": "safe",
-        "message": "Log temiz, herhangi bir anormallik bulunmadı."
+        "processed": len(results),
+        "threats": sum(1 for result in results if result["alerts"]),
+        "results": results,
+        "errors": errors,
     }
 
-# ---------------------------------------------------------
-# YENİ EKLENEN ROTALAR: Arayüzdeki DB Geçmişi Menüsü İçin
-# ---------------------------------------------------------
 
-# 2. YENİ ROTA: Tüm log geçmişini getirir (Son 50 kayıt)
 @router.get("/logs/")
-def get_all_logs(limit: int = 50, db: Session = Depends(get_db)):
-    """Arayüzdeki geçmiş kayıtlar tablosu için tüm logları döndürür."""
-    # SQLAlchemy ile api_logs tablosundan en yeni kayıtları çekiyoruz
-    logs = db.query(APILog).order_by(APILog.timestamp.desc()).limit(limit).all()
-    return logs
+def get_all_logs(limit: int = Query(default=50, ge=1, le=500), db: Session = Depends(get_db)):
+    logs = (
+        db.query(APILog)
+        .options(selectinload(APILog.alerts))
+        .order_by(APILog.timestamp.desc(), APILog.log_id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "log_id": log.log_id,
+            "timestamp": log.timestamp,
+            "source_ip": log.source_ip,
+            "endpoint": log.endpoint,
+            "http_method": log.http_method,
+            "status_code": log.status_code,
+            "payload_data": log.payload_data,
+            "alerts": [
+                {
+                    "alert_id": alert.alert_id,
+                    "alert_type": alert.alert_type,
+                    "severity_level": alert.severity_level,
+                    "is_resolved": alert.is_resolved,
+                }
+                for alert in log.alerts
+            ],
+        }
+        for log in logs
+    ]
 
-# 3. YENİ ROTA: Sadece tespit edilen alarmları getirir (Son 50 kayıt)
+
 @router.get("/alerts/")
-def get_all_alerts(limit: int = 50, db: Session = Depends(get_db)):
-    """Sadece kural motorunun yakaladığı kritik zafiyetleri döndürür."""
+def get_all_alerts(limit: int = Query(default=50, ge=1, le=500), db: Session = Depends(get_db)):
     alerts = db.query(SecurityAlert).order_by(SecurityAlert.alert_id.desc()).limit(limit).all()
-    return alerts
+    return [
+        {
+            "alert_id": alert.alert_id,
+            "log_id": alert.log_id,
+            "alert_type": alert.alert_type,
+            "severity_level": alert.severity_level,
+            "is_resolved": alert.is_resolved,
+        }
+        for alert in alerts
+    ]
 
-# --- KURAL MOTORU İÇİN ROTALAR ---
 
 class SignatureCreate(BaseModel):
-    signature: str
+    signature: str = Field(min_length=1, max_length=200)
+
 
 @router.get("/rules/")
 def get_rules():
-    """Aktif zararlı payload imzalarını döndürür."""
-    return {"signatures": rule_engine.MALICIOUS_SIGNATURES}
+    return {
+        "signatures": rule_engine.MALICIOUS_SIGNATURES,
+        "sql_error_patterns": [pattern.pattern for pattern in rule_engine.SQL_ERROR_PATTERNS],
+    }
+
 
 @router.post("/rules/")
 def add_rule(new_sig: SignatureCreate):
-    """Sisteme canlı olarak yeni bir zararlı imza ekler."""
-    if new_sig.signature not in rule_engine.MALICIOUS_SIGNATURES:
-        rule_engine.MALICIOUS_SIGNATURES.append(new_sig.signature)
-        return {"status": "success", "message": "Yeni tehdit imzası başarıyla eklendi."}
+    signature = new_sig.signature.strip()
+    if not signature:
+        raise HTTPException(status_code=422, detail="Signature must not be blank")
+    if signature.casefold() not in {item.casefold() for item in rule_engine.MALICIOUS_SIGNATURES}:
+        rule_engine.MALICIOUS_SIGNATURES.append(signature)
+        return {"status": "success", "message": "Yeni tehdit imzası bu sunucu oturumuna eklendi."}
     return {"status": "info", "message": "Bu imza zaten sistemde mevcut."}

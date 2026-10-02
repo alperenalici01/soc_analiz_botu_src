@@ -1,54 +1,65 @@
-from models.schemas import APILogCreate
-from typing import Tuple, Optional
+import re
+from typing import List, Tuple
+from urllib.parse import unquote
 
-# CTF laboratuvarlarından aşina olduğumuz zararlı payload imzaları
+from core.config import RATE_LIMIT_MAX_REQUESTS
+from models.schemas import APILogCreate
+
+
 MALICIOUS_SIGNATURES = [
-    # SQL Injection (SQLi)
-    "' OR 1=1", "UNION SELECT", "DROP TABLE", "--", "' OR '1'='1", 
+    "' OR 1=1", "UNION SELECT", "DROP TABLE", "--", "' OR '1'='1",
     "WAITFOR DELAY", "SLEEP(", "EXEC xp_cmdshell",
-    
-    # Cross-Site Scripting (XSS)
     "<script>", "javascript:", "onerror=", "onload=", "document.cookie",
     "<img src=", "alert(1)",
-    
-    # Local File Inclusion (LFI) & Path Traversal
     "../", "..\\", "/etc/passwd", "C:\\Windows\\System32", "/etc/shadow",
-    
-    # OS Command Injection
     "; ls", "| whoami", "&& cat", "$(whoami)", "|| dir",
-    
-    # Modern / Çeşitli Zafiyetler (Log4j, NoSQL Injection, XXE)
-    "${jndi:", '{"$gt":', '{"$ne":', "<!ENTITY"
+    "${jndi:", '{"$gt":', '{"$ne":', "<!ENTITY",
 ]
 
-def analyze_log(log: APILogCreate) -> Tuple[bool, Optional[str], Optional[str]]:
-    """
-    Gelen API logunu analiz eder ve tehdit durumunu döndürür.
-    Dönüş: (Tehdit_Var_Mi (bool), Tehdit_Turu (str), Seviye (str))
-    """
-    threat_found = False
-    threat_type = None
-    severity = None
+SQL_ERROR_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bsql syntax\b",
+        r"\bsyntax error\b",
+        r"\bsqlite(?:3)?\.error\b",
+        r"\boperationalerror\b",
+        r"\bintegrityerror\b",
+        r"\bmysql(?: error)?\b",
+        r"\bpostgres(?:ql)?(?: error)?\b",
+        r"\bora-\d{5}\b",
+        r"\bquery failed\b",
+        r"\bdatabase exception\b",
+    )
+]
 
-    # KURAL 1: Rate Limit ve Brute Force İhlali
-    if log.status_code == 429:
-        threat_found = True
-        threat_type = "Brute Force / Rate Limit İhlali"
-        severity = "Orta"
 
-    # KURAL 2: Yetkisiz Erişim (Broken Access Control)
-    elif ("/admin" in log.endpoint or "/iptal" in log.endpoint) and log.status_code in [401, 403]:
-        threat_found = True
-        threat_type = "Yetki Aşımı Denemesi (Broken Access Control)"
-        severity = "Yüksek"
+def analyze_log(
+    log: APILogCreate,
+    recent_request_count: int = 0,
+) -> List[Tuple[str, str]]:
+    """Return every deterministic detection and its severity for one log event."""
+    findings: List[Tuple[str, str]] = []
+    searchable_text = unquote(f"{log.endpoint} {log.payload_data or ''}")
+    lower_text = searchable_text.lower()
 
-    # KURAL 3: Zararlı Payload Tespiti (SQLi, XSS)
-    elif log.payload_data:
-        for signature in MALICIOUS_SIGNATURES:
-            if signature in log.payload_data:
-                threat_found = True
-                threat_type = f"Zararlı Payload ({signature})"
-                severity = "Kritik"
-                break  # Bir tane zafiyet bulmamız alarm için yeterli
+    if log.status_code == 403:
+        findings.append(("403 Forbidden yetkisiz erişim denemesi", "Yüksek"))
+    elif log.status_code == 429:
+        findings.append(("Rate Limit yanıtı (HTTP 429)", "Orta"))
 
-    return threat_found, threat_type, severity
+    if log.http_method.upper() == "POST":
+        matched_signature = next(
+            (signature for signature in MALICIOUS_SIGNATURES if signature.lower() in lower_text),
+            None,
+        )
+        if matched_signature:
+            findings.append((f"Şüpheli POST payload imzası ({matched_signature})", "Kritik"))
+
+    raw_payload = log.payload_data or ""
+    if any(pattern.search(raw_payload) for pattern in SQL_ERROR_PATTERNS):
+        findings.append(("Başarısız SQL sorgusu / veritabanı hatası", "Yüksek"))
+
+    if recent_request_count + 1 > RATE_LIMIT_MAX_REQUESTS:
+        findings.append(("Rate Limit ihlali (IP istek eşiği aşıldı)", "Orta"))
+
+    return findings
