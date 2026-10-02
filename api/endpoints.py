@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, selectinload
 
 from core import rule_engine
+from core.config import PROJECT_ROOT
+from core.file_monitor import scan_log_file
 from core.ingestion import ingest_log
 from core.log_parser import parse_log_line
 from models.database import APILog, SecurityAlert, SessionLocal
@@ -12,6 +14,7 @@ from models.schemas import APILogCreate, TextLogIngest
 
 
 router = APIRouter()
+DEMO_LOG_PATH = PROJECT_ROOT / "dummy_data" / "server_access.log"
 
 
 def get_db():
@@ -68,6 +71,13 @@ def ingest_text_logs(request: TextLogIngest, db: Session = Depends(get_db)):
         "results": results,
         "errors": errors,
     }
+
+
+@router.post("/demo/")
+def load_demo_logs():
+    if not DEMO_LOG_PATH.is_file():
+        raise HTTPException(status_code=404, detail=f"Demo log file not found: {DEMO_LOG_PATH}")
+    return scan_log_file(DEMO_LOG_PATH)
 
 
 @router.get("/logs/")

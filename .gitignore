@@ -60,6 +60,9 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+threat_hunter.db
+threat_hunter.db-shm
+threat_hunter.db-wal
 
 # Flask stuff:
 instance/

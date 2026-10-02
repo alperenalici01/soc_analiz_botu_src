@@ -6,9 +6,9 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from api.endpoints import router as api_router
-from core.config import LOG_POLL_INTERVAL_SECONDS, LOG_WATCH_DIR
-from core.file_monitor import scan_watch_directory
-from models.database import Base, engine, seed_default_roles
+from core.config import LOG_POLL_INTERVAL_SECONDS, LOG_WATCH_DIR, PROJECT_ROOT
+from core.file_monitor import scan_log_file, scan_watch_directory
+from models.database import Base, engine, migrate_legacy_schema, seed_default_roles
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -29,8 +29,15 @@ async def _watch_log_directory():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    migrate_legacy_schema()
     seed_default_roles()
     LOG_WATCH_DIR.mkdir(parents=True, exist_ok=True)
+    demo_log = PROJECT_ROOT / "dummy_data" / "server_access.log"
+    if demo_log.is_file():
+        try:
+            await asyncio.to_thread(scan_log_file, demo_log)
+        except (OSError, SQLAlchemyError):
+            logger.exception("Initial demo log scan failed for %s", demo_log)
     watcher = asyncio.create_task(_watch_log_directory())
     try:
         yield
@@ -49,9 +56,13 @@ app = FastAPI(
 # Backend API endpointlerimizi bağlıyoruz
 app.include_router(api_router, prefix="/api/v1")
 
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+app.mount(
+    "/static",
+    StaticFiles(directory=str(PROJECT_ROOT / "frontend")),
+    name="static",
+)
 
 
 @app.get("/", response_class=FileResponse)
 def serve_dashboard():
-    return FileResponse("frontend/index.html")
+    return FileResponse(PROJECT_ROOT / "frontend" / "index.html")

@@ -1,6 +1,29 @@
 let totalScans = 0;
 let totalThreats = 0;
 
+document.addEventListener('DOMContentLoaded', initializeDashboard);
+
+async function initializeDashboard() {
+    await fetchLogsFromDB(true);
+    fetchRules();
+}
+
+async function loadDemoLogs() {
+    const button = document.querySelector('.panel-header button[onclick="loadDemoLogs()"]');
+    if (button) button.disabled = true;
+    try {
+        const response = await fetch('/api/v1/demo/', { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Demo logları yüklenemedi.');
+        await fetchLogsFromDB(true);
+        alert(`${data.processed} demo logu işlendi, ${data.invalid} satır atlandı. Demo daha önce yüklendiyse yeni kayıt eklenmez.`);
+    } catch (error) {
+        alert(`Demo logları yüklenemedi: ${error.message}`);
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
 // GÜVENLİK YAMASI: Ekrana basılan zararlı payloadların tarayıcıda çalışmasını (XSS) engeller
 function escapeHTML(str) {
     if (!str) return '';
@@ -27,18 +50,44 @@ function switchTab(tabName) {
 // -----------------------------------------
 // DB GEÇMİŞİ VE İNCELEME MANTIĞI
 // -----------------------------------------
-async function fetchLogsFromDB() {
+async function fetchLogsFromDB(showLiveStream = false) {
     const tbody = document.getElementById('dbTableBody');
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 30px;">Veriler yükleniyor...</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 30px;">Veriler yükleniyor...</td></tr>';
     
     try {
         const response = await fetch('/api/v1/logs/');
+        if (!response.ok) throw new Error(`Log API HTTP ${response.status}`);
         const logs = await response.json();
-        tbody.innerHTML = '';
+        const statusBadge = document.getElementById('status-badge');
+        if (statusBadge) {
+            statusBadge.innerText = '🟢 Backend bağlı';
+            statusBadge.style.color = 'var(--success)';
+        }
+        if (tbody) tbody.innerHTML = '';
         
         if (logs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 30px; color: #94a3b8;">Veritabanında kayıt yok.</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 30px; color: #94a3b8;">Veritabanında kayıt yok.</td></tr>';
+            if (showLiveStream) {
+                document.getElementById('resultBox').innerHTML =
+                    '<div style="color: var(--text-muted); text-align: center; margin-top: 80px;">Henüz log yok. Demo Logları Yükle düğmesini kullanın.</div>';
+                totalScans = 0;
+                totalThreats = 0;
+                updateCounters();
+            }
             return;
+        }
+
+        if (showLiveStream) {
+            document.getElementById('resultBox').innerHTML = '';
+            totalScans = 0;
+            totalThreats = 0;
+            [...logs].reverse().forEach(log => renderAnalysisResult(log, {
+                status: log.alerts && log.alerts.length ? 'danger' : 'safe',
+                alerts: (log.alerts || []).map(alert => ({
+                    type: alert.alert_type,
+                    severity: alert.severity_level
+                }))
+            }));
         }
 
         logs.forEach(log => {
@@ -78,7 +127,16 @@ async function fetchLogsFromDB() {
             tbody.innerHTML += row;
         });
     } catch (error) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color: #ef4444;">API Bağlantı Hatası!</td></tr>`;
+        const statusBadge = document.getElementById('status-badge');
+        if (statusBadge) {
+            statusBadge.innerText = '🔴 Backend erişilemiyor';
+            statusBadge.style.color = 'var(--danger)';
+        }
+        if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color: #ef4444;">API Bağlantı Hatası: ${escapeHTML(error.message)}</td></tr>`;
+        if (showLiveStream) {
+            document.getElementById('resultBox').innerHTML =
+                `<div style="color:#ef4444;text-align:center;padding:24px;">Backend'e bağlanılamadı: ${escapeHTML(error.message)}. Uygulamayı README'deki komutla başlatın.</div>`;
+        }
     }
 }
 
@@ -100,7 +158,7 @@ async function fetchRules() {
                 <tr>
                     <td style="color: #94a3b8; width: 50px;">${index + 1}</td>
                     <td style="font-family: monospace; color: #f8fafc; font-size: 14px;">${safeSig}</td>
-                    <td><span class="badge badge-safe">Aktif Koruma</span></td>
+                    <td><span class="badge badge-safe">Tespit kuralı aktif</span></td>
                 </tr>
             `;
             tbody.innerHTML += row;
@@ -215,7 +273,7 @@ function renderAnalysisResult(logObject, data) {
     const sourceIp = escapeHTML(logObject.source_ip || '-');
     const endpoint = escapeHTML(logObject.endpoint || '-');
     const threats = (data.alerts || (data.alert_details ? [data.alert_details] : []))
-        .map(alert => `${escapeHTML(alert.type)} (${escapeHTML(alert.severity)})`)
+        .map(alert => `${escapeHTML(alert.type || alert.alert_type)} (${escapeHTML(alert.severity || alert.severity_level)})`)
         .join('<br>');
 
     let logHTML = '';
@@ -245,7 +303,11 @@ function renderAnalysisResult(logObject, data) {
             </div>`;
     }
 
-    resultBox.innerHTML = logHTML + resultBox.innerHTML;
+    resultBox.insertAdjacentHTML('afterbegin', logHTML);
+    updateCounters();
+}
+
+function updateCounters() {
     document.getElementById('count-total').innerText = totalScans;
     document.getElementById('count-threats').innerText = totalThreats;
 }
