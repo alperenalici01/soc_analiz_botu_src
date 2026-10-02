@@ -21,3 +21,7 @@ class SecurityAlertResponse(BaseModel):
 
     class Config:
         from_attributes = True # SQLAlchemy (Veritabanı) objelerini otomatik JSON'a çevirmek için gerekli
+
+
+class TextLogIngest(BaseModel):
+    content: str

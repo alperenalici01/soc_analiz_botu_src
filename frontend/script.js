@@ -44,9 +44,12 @@ async function fetchLogsFromDB() {
         logs.forEach(log => {
             const dateObj = new Date(log.timestamp);
             const formattedDate = dateObj.toLocaleString('tr-TR');
-            const isThreat = log.status_code >= 400 || (log.payload_data && log.payload_data.includes('script')); 
+            const isThreat = log.alerts && log.alerts.length > 0;
             const statusColor = isThreat ? 'color: #ef4444;' : 'color: #10b981;';
-            const statusText = isThreat ? 'Bloke' : 'Temiz';
+            const statusText = isThreat ? 'Alarm' : 'Temiz';
+            const displayIp = escapeHTML(log.source_ip);
+            const displayMethod = escapeHTML(log.http_method);
+            const displayEndpoint = escapeHTML(log.endpoint);
             
             const logId = 'db_log_' + log.log_id;
             
@@ -56,8 +59,8 @@ async function fetchLogsFromDB() {
             const row = `
                 <tr>
                     <td>${formattedDate}</td>
-                    <td style="font-family: monospace; color: #a5b4fc;">${log.source_ip}</td>
-                    <td><span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; margin-right: 8px;">${log.http_method}</span> ${log.endpoint}</td>
+                    <td style="font-family: monospace; color: #a5b4fc;">${displayIp}</td>
+                    <td><span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; margin-right: 8px;">${displayMethod}</span> ${displayEndpoint}</td>
                     <td style="font-weight: bold;">${log.status_code}</td>
                     <td class="status-cell" style="${statusColor}">
                         ${statusText}
@@ -124,7 +127,7 @@ async function addNewSignature() {
         fetchRules(); 
         
         if(result.status === 'success') {
-            alert("✅ Yeni koruma kuralı başarıyla eklendi! Bot artık bu imzayı anında bloklayacak.");
+            alert("✅ Yeni tespit imzası bu sunucu oturumu boyunca etkin.");
         } else {
             alert("ℹ️ " + result.message);
         }
@@ -142,15 +145,31 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     const reader = new FileReader();
     reader.onload = async function(event) {
         try {
-            const parsedData = JSON.parse(event.target.result);
-            if (Array.isArray(parsedData)) {
-                for (const log of parsedData) await sendToBackend(log);
+            const content = String(event.target.result || '');
+            if (/\.(log|txt|jsonl)$/i.test(file.name)) {
+                const response = await fetch('/api/v1/ingest-text/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Log dosyası işlenemedi.');
+                data.results.forEach(result => renderAnalysisResult(result.log, result));
+                if (data.errors.length) {
+                    alert(`${data.processed} satır işlendi; ${data.errors.length} hatalı satır var. İlk hata (${data.errors[0].line}. satır): ${data.errors[0].error}`);
+                }
             } else {
-                await sendToBackend(parsedData);
+                const parsedData = JSON.parse(content);
+                if (Array.isArray(parsedData)) {
+                    for (const log of parsedData) await sendToBackend(log);
+                } else {
+                    await sendToBackend(parsedData);
+                }
             }
-            document.getElementById('fileInput').value = ''; 
         } catch (error) {
-            alert("Geçersiz JSON formatı!");
+            alert(`Dosya analiz edilemedi: ${error.message}`);
+        } finally {
+            document.getElementById('fileInput').value = '';
         }
     };
     reader.readAsText(file);
@@ -161,15 +180,15 @@ async function analyzeManualData() {
     if (!logDataStr) return;
     try {
         const parsedLog = JSON.parse(logDataStr);
-        await sendToBackend(parsedLog);
+        if (Array.isArray(parsedLog)) {
+            for (const log of parsedLog) await sendToBackend(log);
+        } else {
+            await sendToBackend(parsedLog);
+        }
     } catch (e) { alert("HATA: Kutuya geçerli bir JSON yapıştırın!"); }
 }
 
 async function sendToBackend(logObject) {
-    const resultBox = document.getElementById('resultBox');
-    const emptyState = document.getElementById('empty-state');
-    if (emptyState) emptyState.remove();
-
     try {
         const response = await fetch('/api/v1/analyze-log/', {
             method: 'POST',
@@ -177,45 +196,58 @@ async function sendToBackend(logObject) {
             body: JSON.stringify(logObject)
         });
         const data = await response.json();
-        totalScans++;
-        
-        const timeNow = new Date().toLocaleTimeString('tr-TR');
-        const logId = 'log_' + Date.now() + Math.floor(Math.random() * 1000);
-        
-        // GÜVENLİK YAMASI: Sağ taraftaki akışa JSON basılırken özel karakterleri escape et
-        const rawJsonString = escapeHTML(JSON.stringify(logObject, null, 2));
-        
-        let logHTML = '';
-        if (data.status === 'danger') {
-            totalThreats++;
-            logHTML = `
+        if (!response.ok) throw new Error(data.detail || 'Log API tarafından kabul edilmedi.');
+        renderAnalysisResult(logObject, data);
+    } catch (error) {
+        alert(`Log gönderilemedi: ${error.message}`);
+    }
+}
+
+function renderAnalysisResult(logObject, data) {
+    const resultBox = document.getElementById('resultBox');
+    const emptyState = document.getElementById('empty-state');
+    if (emptyState) emptyState.remove();
+
+    totalScans++;
+    const timeNow = new Date().toLocaleTimeString('tr-TR');
+    const logId = 'log_' + Date.now() + Math.floor(Math.random() * 1000);
+    const rawJsonString = escapeHTML(JSON.stringify(logObject, null, 2));
+    const sourceIp = escapeHTML(logObject.source_ip || '-');
+    const endpoint = escapeHTML(logObject.endpoint || '-');
+    const threats = (data.alerts || (data.alert_details ? [data.alert_details] : []))
+        .map(alert => `${escapeHTML(alert.type)} (${escapeHTML(alert.severity)})`)
+        .join('<br>');
+
+    let logHTML = '';
+    if (data.status === 'danger') {
+        totalThreats++;
+        logHTML = `
             <div class="log-item danger">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                    <strong style="color: #f8fafc;">🚨 Tehdit: ${escapeHTML(data.alert_details.type)}</strong>
-                    <span class="badge badge-danger">${data.alert_details.severity.toUpperCase()}</span>
+                    <strong style="color: #f8fafc;">🚨 Tehdit tespit edildi</strong>
+                    <span class="badge badge-danger">ALARM</span>
                 </div>
-                <div style="color: #94a3b8; font-size: 0.8rem; margin-bottom: 10px;">IP: ${logObject.source_ip || '-'} | Hedef: ${logObject.endpoint || '-'} | ${timeNow}</div>
+                <div style="color: #ef4444; font-size: 0.85rem; margin-bottom: 10px;">${threats}</div>
+                <div style="color: #94a3b8; font-size: 0.8rem; margin-bottom: 10px;">IP: ${sourceIp} | Hedef: ${endpoint} | ${timeNow}</div>
                 <button class="btn-outline btn-small" onclick="toggleDetails('${logId}')">🔍 Paketi İncele</button>
                 <div class="raw-data-box" id="${logId}">${rawJsonString}</div>
             </div>`;
-        } else {
-            logHTML = `
+    } else {
+        logHTML = `
             <div class="log-item safe">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                     <strong style="color: #f8fafc;">✅ Temiz Trafik</strong>
                     <span class="badge badge-safe">GÜVENLİ</span>
                 </div>
-                <div style="color: #94a3b8; font-size: 0.8rem; margin-bottom: 10px;">IP: ${logObject.source_ip || '-'} | Hedef: ${logObject.endpoint || '-'} | ${timeNow}</div>
+                <div style="color: #94a3b8; font-size: 0.8rem; margin-bottom: 10px;">IP: ${sourceIp} | Hedef: ${endpoint} | ${timeNow}</div>
                 <button class="btn-outline btn-small" onclick="toggleDetails('${logId}')">🔍 Paketi İncele</button>
                 <div class="raw-data-box" id="${logId}">${rawJsonString}</div>
             </div>`;
-        }
-        
-        resultBox.innerHTML = logHTML + resultBox.innerHTML;
-        document.getElementById('count-total').innerText = totalScans;
-        document.getElementById('count-threats').innerText = totalThreats;
-        
-    } catch (error) { console.error("Backend hatası:", error); }
+    }
+
+    resultBox.innerHTML = logHTML + resultBox.innerHTML;
+    document.getElementById('count-total').innerText = totalScans;
+    document.getElementById('count-threats').innerText = totalThreats;
 }
 
 function clearStream() {

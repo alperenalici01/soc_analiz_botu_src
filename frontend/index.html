@@ -27,12 +27,12 @@
                 <span class="stat-value" id="count-total">0</span>
             </div>
             <div class="stat-card">
-                <span style="color: var(--danger); font-size: 0.85rem;">BLOKLANAN TEHDİT</span>
+                <span style="color: var(--danger); font-size: 0.85rem;">ALARM ÜRETİLEN LOG</span>
                 <span class="stat-value" id="count-threats" style="color: var(--danger);">0</span>
             </div>
             <div class="stat-card">
-                <span style="color: var(--accent); font-size: 0.85rem;">AKTİF SENSÖR</span>
-                <span class="stat-value" style="color: var(--accent);">WAF Aktif</span>
+                <span style="color: var(--accent); font-size: 0.85rem;">ANALİZ MODÜLÜ</span>
+                <span class="stat-value" style="color: var(--accent);">Kural Motoru</span>
             </div>
         </div>
 
@@ -43,9 +43,9 @@
                     <div class="panel-header">📥 Log Enjeksiyon Portu</div>
                     <label for="fileInput" class="file-upload-wrapper">
                         <div style="font-size: 24px; margin-bottom: 10px;">📂</div>
-                        <div style="font-weight: bold;">Çoklu JSON Log Dosyası Yükle</div>
-                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 5px;">Birden fazla log içeren .json dosyanızı seçin</div>
-                        <input type="file" id="fileInput" accept=".json">
+                        <div style="font-weight: bold;">JSON veya Sunucu Log Dosyası Yükle</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 5px;">.json, .jsonl, .log veya .txt dosyası seçin</div>
+                        <input type="file" id="fileInput" accept=".json,.jsonl,.log,.txt">
                     </label>
                     <div style="text-align: center; color: var(--text-muted); margin-bottom: 15px; font-size: 0.9rem;">— VEYA MANUEL YAPIŞTIR —</div>
                     <textarea id="logInput" placeholder="Tekil JSON verisini buraya yapıştırın..."></textarea>
@@ -81,7 +81,7 @@
                                 <th>Kaynak IP</th>
                                 <th>Hedef Metot</th>
                                 <th>Durum Kodu</th>
-                                <th>Sonuç</th>
+                                <th>Analiz</th>
                             </tr>
                         </thead>
                         <tbody id="dbTableBody">
@@ -96,7 +96,7 @@
             <div class="panel" style="flex: 1;">
                 <div class="panel-header">⚙️ WAF ve Kural Motoru Yapılandırması</div>
                 <div style="color: var(--text-muted); margin-bottom: 20px;">
-                    Sistemin tehdit algılama mekanizmasını (Detection Engine) buradan yönetebilirsiniz. Yeni zararlı payload imzaları ekleyerek botun sıfırıncı gün (0-day) zafiyetlerini yakalama kapasitesini artırın.
+                    Sistemin tehdit algılama mekanizmasını buradan yönetebilirsiniz. Eklenen imzalar mevcut sunucu oturumu boyunca etkin olur; tek başına isteği engellemez.
                 </div>
                 
                 <div style="display: flex; gap: 15px; margin-bottom: 25px;">
