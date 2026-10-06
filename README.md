@@ -1,67 +1,121 @@
-# Spor Şimdi API Log Analiz Botu
+# SOC Log Analiz Botu
 
-Bu prototip, sahte veya uygulamadan dışa aktarılmış JSONL / Apache-Nginx combined access loglarını okur, deterministik kurallarla inceleyip SQLite veritabanına log ve alarm olarak kaydeder. Bu bir WAF değildir; trafiği engellemez ve harici sistemlerden kendi başına log çekmez.
+JSON ve Apache/Nginx access loglarını kural tabanlı analiz ederek SQLite veritabanına kaydeden, alarmları ve raporları web arayüzünde gösteren bir SOC prototipidir.
 
-## Çalıştırma
+> Bu uygulama bir WAF değildir: trafiği engellemez, dış sistemlerden kendiliğinden log çekmez ve kimlik doğrulama/rol bazlı erişim sağlamaz. Canlı dosya izleme yalnızca kullanıcı başlattığında çalışır.
 
-Windows'ta projeyi test etmek için `run.bat` dosyasına çift tıklayın. Sunucu ayrı bir pencerede açılır; arayüz varsayılan tarayıcıda `http://127.0.0.1:8000/` adresinde yüklenir. Sunucuyu kapatmak için açılan sunucu penceresini kapatın.
+## Gereksinimler ve başlatma
 
-Elle çalıştırmak için proje kökünde:
+- Windows için `run.bat` dosyasını çalıştırın. Sunucu penceresi açılır ve arayüz tarayıcıda `http://127.0.0.1:8000/` adresinden yüklenir.
+- Elle başlatmak için Python 3.10+ gerekir:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn main:app --reload
+python -m uvicorn main:app --reload
 ```
 
-Arayüz `http://127.0.0.1:8000/`, API dokümantasyonu `http://127.0.0.1:8000/docs` adresindedir. Uygulama başlarken SQLite tablolarını ve `admin`, `analyst`, `viewer` rol kayıtlarını oluşturur. Eski prototip veritabanını da kayıtları silmeden yeni sütunlara yükseltir. Demo logları kendiliğinden içe aktarılmaz; **Demo Logları Yükle** düğmesine basıldığında açıkça yüklenir. Canlı olay akışı sayfa açıldığında veritabanındaki kayıtlarla doldurulur. Gerçek log dosyası izleme de uygulama başlangıcında kapalıdır; **Canlı Dosya Dinleme** sekmesine mutlak dosya yolunu girip **İzlemeyi Başlat** seçilince ilgili dosya her saniye taranır. Başlangıçta dosyanın tamamlanmış mevcut satırları okunur, sonra yeni tamamlanmış satırlar işlenir; **İzlemeyi Durdur** ile izleme sonlandırılır. `.log`, `.jsonl` ve `.txt` dosyaları desteklenir.
+Arayüz `http://127.0.0.1:8000/`, etkileşimli API dokümantasyonu `http://127.0.0.1:8000/docs` adresindedir.
 
-Canlı tarama aralığı ve rate-limit eşikleri ortam değişkenleriyle değiştirilebilir:
+Uygulama ilk açıldığında veritabanı tabloları oluşturulur ve eksik varsayılan roller eklenir. Mevcut veriler korunur; demo logları otomatik yüklenmez ve dosya izleme otomatik başlamaz.
 
-| Değişken | Varsayılan | Açıklama |
-|---|---:|---|
-| `LIVE_LOG_POLL_INTERVAL_SECONDS` | `1` | Kullanıcı tarafından başlatılan canlı log dosyası izleme tarama aralığı |
-| `RATE_LIMIT_WINDOW_SECONDS` | `60` | İstek sayım penceresi |
-| `RATE_LIMIT_MAX_REQUESTS` | `20` | Aynı IP için pencere içindeki izin verilen istek sayısı |
-| `DATABASE_URL` | Proje klasöründeki `threat_hunter.db` | SQLAlchemy veritabanı bağlantısı |
+## Arayüz
 
-Bir IP aynı zaman penceresinde eşiği aşarsa aşan istek alarm üretir. HTTP 429, 403, bilinen zararlı payload imzaları ve yaygın SQL/veritabanı hata metinleri de ayrıca tespit edilir. Logların zaman damgaları oran hesabında kullanılır.
+- **Canlı Analiz Paneli:** JSON veya metin log dosyası yükleyin, JSON verisini elle yapıştırın ya da demo kayıtlarını ekleyin. Olay akışı veritabanındaki son kayıtlarla açılır.
+- **Geçmiş Kayıtlar (DB):** En son log kayıtlarını ve payload ayrıntılarını görüntüleyin.
+- **Kural Motoru Ayarları:** Etkin tespit imzalarını görün ve yeni imza ekleyin. Eklenen imzalar yalnızca çalışan sunucu süreci boyunca bellekte tutulur.
+- **Raporlama Çıktıları:** Toplam log ve alarm sayılarını, alarm üreten loglara göre en çok saldıran IP'leri ve alarm türlerini pasta grafikleriyle inceleyin. Kaynak dosyası bulunan loglar için dosya adı/yolu, istek alanları, payload veya ham satır ve alarmlar ayrı ayrı gösterilir. **Excel/CSV Olarak İndir** rapor özetini ve dosya kayıtlarını indirir.
+- **Canlı Dosya Dinleme:** Sunucunun erişebildiği bir `.log`, `.jsonl` veya `.txt` dosyasının mutlak yolunu girip izlemeyi elle başlatın/durdurun. İlk kez izlenen dosyanın tamamlanmış satırları okunur; imleç veritabanında saklandığından aynı dosya sonraki başlatmalarda kaldığı yerden devam eder. Dosyaya eklenen yeni tamamlanmış satırlar işlenir. Aynı anda tek dosya izlenir. Uygulama kapanınca izleme durur ve yeniden açılışta kendiliğinden başlamaz.
 
-## Log biçimleri ve demo
+Canlı izleme durdurulduğunda **Raporu Görüntüle** düğmesi ilgili rapor sayfasına geçiş sağlar.
 
-- JSON Lines kayıtları `timestamp`, `source_ip` (veya `ip`), `endpoint` (veya `path`), `http_method` (veya `method`) ve `status_code` (veya `status`) alanlarını taşımalıdır. `payload_data`, `payload` veya `message` isteğe bağlıdır.
-- Apache/Nginx combined access log biçimi desteklenir. İstek URL’sinin query kısmı ve user-agent alanı payload analizi için kullanılır.
-- `dummy_data/server_access.log` kasıtlı olarak temiz istek, 403, şüpheli POST/SQLi imzası, SQL hata metni ve eşik üstü istek örnekleri içerir. Arayüzdeki demo düğmesiyle yükleyebilir veya **Canlı Dosya Dinleme** sekmesinden izleyebilirsiniz.
-- Desteklenmeyen satırlar atlanır; satır numarasıyla API cevabında veya arka plan uygulama loglarında raporlanır.
+## Log biçimleri
 
-Uygulama API'si: `POST /api/v1/analyze-log/` tek yapılandırılmış kaydı, `POST /api/v1/ingest-text/` çok satırlı log metnini alır. Kayıt geçmişi ve alarm listesi `GET /api/v1/logs/` ve `GET /api/v1/alerts/` uçlarından görüntülenir.
+### JSON ve JSON Lines
 
-Sol menüdeki **Raporlama Çıktıları** sekmesi veritabanındaki tüm log ve alarmlardan en çok saldıran IP'leri (alarm üreten benzersiz log sayısına göre) ve alarm türlerinin dağılımını pasta grafikleriyle gösterir. Yüklenen her dosyanın kayıtları; zaman, IP, istek, payload/ham satır ve tespit edilen alarmlarla ayrı ayrı raporlanır. JSON/JSONL/log dosyaları kaynak dosya adıyla veritabanında ilişkilendirilir. **Excel/CSV Olarak İndir** düğmesi özet ve dosya kayıtlarını UTF-8 BOM'lu CSV olarak indirir; dosya Excel'de doğrudan açılabilir. Rapor API'si `GET /api/v1/reports/`, dışa aktarım ise `GET /api/v1/reports/export.csv` adresindedir.
+Tek bir JSON nesnesi veya nesne dizisi yüklenebilir. Gerekli alanların alternatif adları:
 
-Canlı izleme API'si `GET /api/v1/live-monitor/status/`, `POST /api/v1/live-monitor/start/` (`{"file_path":"C:\\nginx\\logs\\access.log"}`) ve `POST /api/v1/live-monitor/stop/` uçlarını sağlar. İzleyici uygulama kapanırken durdurulur ve sonraki başlatmada otomatik olarak tekrar başlamaz.
+| Alan | Kabul edilen adlar |
+|---|---|
+| Zaman | `timestamp` veya `@timestamp` (ISO-8601) |
+| Kaynak IP | `source_ip`, `ip` veya `client_ip` |
+| İstek hedefi | `endpoint`, `path` veya `url` |
+| HTTP metodu | `http_method` veya `method` |
+| HTTP durum kodu | `status_code` veya `status` |
+| İsteğe bağlı içerik | `payload_data`, `payload` veya `message` |
 
-Canlı izlemeyi denemek için `dummy_data/live_tail_demo.log` dosyasının mutlak yolunu **Canlı Dosya Dinleme** sekmesine girip izlemeyi başlatın. Dosyaya yeni satır ekleyerek canlı takibi simüle edebilirsiniz:
+`.jsonl`, `.log` ve `.txt` dosyaları satır satır JSON veya Apache/Nginx combined access log olarak işlenir. Desteklenmeyen satırlar atlanır; metin içe aktarma API'si hatalı satır numaralarını yanıtında bildirir.
+
+Örnek JSON:
+
+```json
+{
+  "timestamp": "2026-10-07T02:30:00+03:00",
+  "source_ip": "203.0.113.10",
+  "endpoint": "/api/login",
+  "http_method": "POST",
+  "status_code": 403,
+  "payload_data": "örnek içerik"
+}
+```
+
+## Tespitler
+
+Kural motoru HTTP 403 ve 429 yanıtlarını, POST isteklerindeki bilinen zararlı imzaları, yaygın SQL/veritabanı hata metinlerini ve yapılandırılmış zaman penceresinde eşik üstüne çıkan IP isteklerini raporlar. İnceleme deterministiktir; sonuçlar engelleme veya otomatik müdahale anlamına gelmez.
+
+## Demo ve canlı izleme testi
+
+Canlı Analiz Paneli'ndeki **Demo Logları Yükle** düğmesi `dummy_data/server_access.log` dosyasındaki örnekleri işler. Aynı dosya **Canlı Dosya Dinleme** sekmesinde de seçilebilir.
+
+Canlı eklemeyi simüle etmek için:
+
+1. Canlı Dosya Dinleme sekmesinde `dummy_data/live_tail_demo.log` dosyasının mutlak yolunu girip izlemeyi başlatın.
+2. Başka bir PowerShell penceresinden dosyaya yeni tamamlanmış satır ekleyin:
 
 ```powershell
 Add-Content -LiteralPath ".\dummy_data\live_tail_demo.log" -Encoding utf8 -Value '198.51.100.24 - - [07/Oct/2026:02:18:30 +0300] "GET /api/auth HTTP/1.1" 429 32 "-" "LiveTail-Demo/1.0"'
 ```
 
-Test için Canlı Analiz panelindeki **Test Verilerini Sıfırla** düğmesi logları, alarmları ve dosya tarama imleçlerini siler; kullanıcı ve roller korunur. Ardından **Demo Logları Yükle** ile demo kayıtlarını tekrar ekleyebilir veya dosya yükleyebilirsiniz. Aynı işlemin API ucu `POST /api/v1/data/reset/` adresindedir.
+3. İşlenen sayaçları kontrol edin, izlemeyi durdurun ve **Raporu Görüntüle** seçeneğiyle sonuçları inceleyin.
 
-## Veritabanı modeli
+## Veriler ve yapılandırma
 
-- `api_logs`: kaynak IP, zaman, endpoint, HTTP metodu/durum, payload, ham satır ve kaynak dosya.
-- `security_alerts`: tespitler; `log_id` üzerinden `api_logs` tablosuna foreign key.
-- `roles` ve `users`: kullanıcı-rol ilişkisi `users.role_id` foreign key'iyle tutulur. Varsayılan roller `admin`, `analyst`, `viewer` olarak eklenir.
-- `file_checkpoints`: izlenen her dosyanın son işlenen byte konumu; dosya satırlarıyla aynı transaction içinde güncellenir.
+Varsayılan veritabanı proje klasöründeki `threat_hunter.db` SQLite dosyasıdır. Mevcut kurulumlarda `DATABASE_URL` ile bağlantı adresi değiştirilebilir.
 
-Rol tabloları başlangıç şemasıdır; kimlik doğrulama, parola saklama ve rol bazlı API yetkilendirmesi bu prototipte uygulanmamıştır. İmza ekleme uç noktası da imzayı yalnızca çalışan süreç belleğinde tutar.
+| Ortam değişkeni | Varsayılan | Açıklama |
+|---|---:|---|
+| `DATABASE_URL` | Proje klasöründeki SQLite veritabanı | SQLAlchemy veritabanı bağlantısı |
+| `LIVE_LOG_POLL_INTERVAL_SECONDS` | `1` | Canlı dosyanın tarama aralığı (saniye) |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | IP istek sayımı için zaman penceresi (saniye) |
+| `RATE_LIMIT_MAX_REQUESTS` | `20` | Zaman penceresi içindeki istek eşiği |
 
-## Test
+**Test Verilerini Sıfırla** işlemi logları, alarmları ve dosya izleme imleçlerini siler; kullanıcı ve roller korunur. İzleme imleçleri silindiğinde aynı dosya tekrar başlatılırsa tamamlanmış satırlar baştan işlenebilir. İşlem geri alınamaz.
+
+## API uçları
+
+`/docs` sayfasında istek ve yanıt şemaları görülebilir.
+
+| Metot | Uç | Açıklama |
+|---|---|---|
+| `POST` | `/api/v1/analyze-log/` | Tek JSON logunu analiz eder ve kaydeder |
+| `POST` | `/api/v1/ingest-text/` | JSON Lines veya access log metnini içe aktarır |
+| `POST` | `/api/v1/demo/` | Demo log dosyasını işler |
+| `GET` | `/api/v1/logs/` | Son log kayıtlarını listeler |
+| `GET` | `/api/v1/alerts/` | Alarm kayıtlarını listeler |
+| `GET` | `/api/v1/reports/` | Rapor verilerini döndürür |
+| `GET` | `/api/v1/reports/export.csv` | Excel uyumlu CSV raporu indirir |
+| `POST` | `/api/v1/data/reset/` | Test loglarını, alarmları ve imleçleri siler |
+| `GET` | `/api/v1/rules/` | Etkin imza ve SQL hata kurallarını listeler |
+| `POST` | `/api/v1/rules/` | Çalışan süreç için imza ekler |
+| `GET` | `/api/v1/live-monitor/status/` | Canlı izleme durumunu döndürür |
+| `POST` | `/api/v1/live-monitor/start/` | Mutlak dosya yolu ile canlı izlemeyi başlatır |
+| `POST` | `/api/v1/live-monitor/stop/` | Canlı izlemeyi durdurur |
+
+## Testler
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Testler log ayrıştırmayı, 403/şüpheli POST/SQL hata/rate-limit tespitini, temiz isteğin alarm üretmemesini, rapor agregasyonunu, dosya ayrıntılarını, güvenli test verisi sıfırlamayı ve CSV dışa aktarım güvenliğini kontrol eder.
+Testler log ayrıştırma ve tespitleri, veritabanı işlemlerini, raporlama/CSV çıktısını ve kullanıcı kontrollü canlı izleme davranışını kapsar.
