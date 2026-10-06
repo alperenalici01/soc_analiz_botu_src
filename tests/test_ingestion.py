@@ -7,10 +7,17 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from api.endpoints import get_all_alerts, get_all_logs, ingest_text_logs
+from api.endpoints import (
+    get_all_alerts,
+    get_all_logs,
+    get_report,
+    get_report_csv,
+    ingest_text_logs,
+    reset_test_data,
+)
 from core.file_monitor import scan_log_file
 from core.ingestion import ingest_log
-from models.database import APILog, Base, FileCheckpoint, SecurityAlert, migrate_legacy_schema
+from models.database import APILog, Base, FileCheckpoint, Role, SecurityAlert, User, migrate_legacy_schema
 from models.schemas import APILogCreate, TextLogIngest
 
 
@@ -102,13 +109,125 @@ class IngestionTests(unittest.TestCase):
             "invalid log line\n"
         )
         with self.session_factory() as db:
-            result = ingest_text_logs(TextLogIngest(content=content), db)
+            result = ingest_text_logs(
+                TextLogIngest(content=content, source_file="uploaded-access.log"),
+                db,
+            )
             db.commit()
             self.assertEqual(result["processed"], 1)
             self.assertEqual(result["threats"], 1)
             self.assertEqual(result["errors"][0]["line"], 2)
             self.assertEqual(len(get_all_logs(limit=50, db=db)), 1)
             self.assertEqual(len(get_all_alerts(limit=50, db=db)), 1)
+            self.assertEqual(db.query(APILog).one().source_file, "uploaded-access.log")
+
+    def test_report_aggregates_alarm_logs_and_alert_types(self):
+        with self.session_factory() as db:
+            first_log = APILog(
+                source_ip="203.0.113.10",
+                endpoint="/private",
+                http_method="GET",
+                status_code=403,
+                source_file="attack-sample.jsonl",
+                payload_data="UNION SELECT",
+                raw_line='{"source_ip":"203.0.113.10"}',
+            )
+            second_log = APILog(
+                source_ip="203.0.113.10",
+                endpoint="/private",
+                http_method="POST",
+                status_code=200,
+            )
+            clean_log = APILog(
+                source_ip="203.0.113.11",
+                endpoint="/",
+                http_method="GET",
+                status_code=200,
+            )
+            db.add_all([first_log, second_log, clean_log])
+            db.flush()
+            db.add_all([
+                SecurityAlert(log_id=first_log.log_id, alert_type="403 Forbidden", severity_level="Yüksek"),
+                SecurityAlert(log_id=first_log.log_id, alert_type="SQL error", severity_level="Yüksek"),
+                SecurityAlert(log_id=second_log.log_id, alert_type="403 Forbidden", severity_level="Yüksek"),
+            ])
+            db.commit()
+
+            report = get_report(db)
+
+        self.assertEqual(report["total_logs"], 3)
+        self.assertEqual(report["threat_logs"], 2)
+        self.assertEqual(report["total_alerts"], 3)
+        self.assertEqual(report["top_attackers"], [{"source_ip": "203.0.113.10", "count": 2}])
+        self.assertEqual(
+            report["vulnerability_types"],
+            [{"alert_type": "403 Forbidden", "count": 2}, {"alert_type": "SQL error", "count": 1}],
+        )
+        self.assertEqual(len(report["imported_files"]), 1)
+        file_report = report["imported_files"][0]
+        self.assertEqual(file_report["file_name"], "attack-sample.jsonl")
+        self.assertEqual(file_report["total_logs"], 1)
+        self.assertEqual(file_report["threat_logs"], 1)
+        self.assertEqual(file_report["logs"][0]["payload_data"], "UNION SELECT")
+        self.assertEqual(file_report["logs"][0]["alerts"][0]["alert_type"], "403 Forbidden")
+
+    def test_reset_data_clears_logs_alerts_and_checkpoints_but_preserves_users(self):
+        with self.session_factory() as db:
+            role = Role(name="admin", description="Admin")
+            db.add(role)
+            db.flush()
+            db.add(User(username="test-admin", role_id=role.role_id))
+            log = APILog(
+                source_ip="203.0.113.1",
+                endpoint="/",
+                http_method="GET",
+                status_code=403,
+            )
+            db.add(log)
+            db.flush()
+            db.add(SecurityAlert(
+                log_id=log.log_id,
+                alert_type="403 Forbidden",
+                severity_level="Yüksek",
+            ))
+            db.add(FileCheckpoint(file_path="test.log", byte_offset=10))
+            db.commit()
+
+            result = reset_test_data(db)
+
+            self.assertEqual(result["deleted_logs"], 1)
+            self.assertEqual(result["deleted_alerts"], 1)
+            self.assertEqual(result["deleted_checkpoints"], 1)
+            self.assertEqual(db.query(APILog).count(), 0)
+            self.assertEqual(db.query(SecurityAlert).count(), 0)
+            self.assertEqual(db.query(FileCheckpoint).count(), 0)
+            self.assertEqual(db.query(User).count(), 1)
+            self.assertEqual(db.query(Role).count(), 1)
+
+    def test_report_csv_is_excel_friendly_and_neutralizes_formula_values(self):
+        with self.session_factory() as db:
+            log = APILog(
+                source_ip="=HYPERLINK('https://example.test')",
+                endpoint="/private",
+                http_method="GET",
+                status_code=403,
+            )
+            db.add(log)
+            db.flush()
+            db.add(SecurityAlert(
+                log_id=log.log_id,
+                alert_type="+SUM(1,1)",
+                severity_level="Yüksek",
+            ))
+            db.commit()
+
+            response = get_report_csv(db)
+
+        csv_content = bytes(response.body).decode("utf-8")
+        self.assertTrue(csv_content.startswith("\ufeff"))
+        self.assertIn("attachment; filename=\"guvenlik-raporu.csv\"", response.headers["content-disposition"])
+        self.assertIn("'=HYPERLINK", csv_content)
+        self.assertIn("'+SUM(1,1)", csv_content)
 
 
 if __name__ == "__main__":

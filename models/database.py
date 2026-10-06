@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, inspect
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from core.config import PROJECT_ROOT
 
@@ -22,7 +22,10 @@ class APILog(Base):
     __tablename__ = "api_logs"
 
     log_id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
     source_ip = Column(String(45), index=True)
     endpoint = Column(String(255))
     http_method = Column(String(10))

@@ -1,7 +1,12 @@
+import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from core.config import LIVE_LOG_POLL_INTERVAL_SECONDS
 from core.ingestion import ingest_log
 from core.log_parser import parse_log_line
 from models.database import FileCheckpoint, SessionLocal
@@ -74,12 +79,71 @@ def scan_log_file(path: Path) -> Dict[str, int]:
         return {"processed": processed, "invalid": invalid}
 
 
-def scan_watch_directory(directory: Path) -> Dict[str, int]:
-    directory.mkdir(parents=True, exist_ok=True)
-    totals = {"processed": 0, "invalid": 0}
-    for path in sorted(directory.iterdir()):
-        if path.is_file() and path.suffix.lower() in {".log", ".jsonl"}:
-            result = scan_log_file(path)
-            totals["processed"] += result["processed"]
-            totals["invalid"] += result["invalid"]
-    return totals
+class LiveLogMonitor:
+    def __init__(self, poll_interval_seconds: float = LIVE_LOG_POLL_INTERVAL_SECONDS):
+        self.poll_interval_seconds = poll_interval_seconds
+        self.path: Path | None = None
+        self.task: asyncio.Task | None = None
+        self.state = "stopped"
+        self.last_scan: str | None = None
+        self.processed = 0
+        self.invalid = 0
+        self.error: str | None = None
+
+    def get_status(self) -> Dict[str, object]:
+        active = self.task is not None and not self.task.done()
+        return {
+            "active": active,
+            "state": self.state,
+            "file_path": str(self.path) if self.path else None,
+            "last_scan": self.last_scan,
+            "processed": self.processed,
+            "invalid": self.invalid,
+            "error": self.error,
+            "poll_interval_seconds": self.poll_interval_seconds,
+        }
+
+    async def start(self, path: Path) -> Dict[str, object]:
+        if self.task is not None and not self.task.done():
+            raise RuntimeError("A live log file is already being monitored.")
+
+        self.path = path.resolve(strict=True)
+        self.processed = 0
+        self.invalid = 0
+        self.last_scan = None
+        self.error = None
+        self.state = "starting"
+        self.task = asyncio.create_task(self._watch_file())
+        return self.get_status()
+
+    async def stop(self) -> Dict[str, object]:
+        task = self.task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self.task = None
+        if self.state != "error":
+            self.state = "stopped"
+        return self.get_status()
+
+    async def _watch_file(self) -> None:
+        try:
+            while self.path is not None:
+                try:
+                    result = await asyncio.to_thread(scan_log_file, self.path)
+                except (OSError, SQLAlchemyError) as error:
+                    logger.exception("Live log scan failed for %s", self.path)
+                    self.error = str(error)
+                    self.state = "error"
+                    return
+                self.processed += result["processed"]
+                self.invalid += result["invalid"]
+                self.last_scan = datetime.now(timezone.utc).isoformat()
+                self.state = "running"
+                await asyncio.sleep(self.poll_interval_seconds)
+        except asyncio.CancelledError:
+            self.state = "stopped"
+            raise

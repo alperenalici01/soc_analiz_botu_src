@@ -9,10 +9,12 @@
 <body>
 
     <div class="sidebar">
-        <div class="sidebar-logo">🛡️ ThreatBot v2.0</div>
+        <div class="sidebar-logo">🛡️ ThreatBot v3.0</div>
         <div class="nav-item active" id="menu-live" onclick="switchTab('live')">📊 Canlı Analiz Paneli</div>
         <div class="nav-item" id="menu-db" onclick="switchTab('db')">📜 Geçmiş Kayıtlar (DB)</div>
         <div class="nav-item" id="menu-rules" onclick="switchTab('rules')">⚙️ Kural Motoru Ayarları</div>
+        <div class="nav-item" id="menu-reports" onclick="switchTab('reports')">📈 Raporlama Çıktıları</div>
+        <div class="nav-item" id="menu-tail" onclick="switchTab('tail')">📡 Canlı Dosya Dinleme</div>
     </div>
 
     <div class="main-content">
@@ -42,7 +44,10 @@
                 <div class="panel">
                     <div class="panel-header">
                         <span>📥 Log Enjeksiyon Portu</span>
-                        <button class="btn-outline btn-small" onclick="loadDemoLogs()">🧪 Demo Logları Yükle</button>
+                        <div class="panel-actions">
+                            <button class="btn-outline btn-small" onclick="loadDemoLogs()">🧪 Demo Logları Yükle</button>
+                            <button class="btn-danger-outline btn-small" onclick="resetTestData()">🗑️ Test Verilerini Sıfırla</button>
+                        </div>
                     </div>
                     <label for="fileInput" class="file-upload-wrapper">
                         <div style="font-size: 24px; margin-bottom: 10px;">📂</div>
@@ -121,6 +126,92 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+        <div id="view-reports" class="view-section">
+            <div class="panel report-panel">
+                <div class="panel-header">
+                    <span>📈 Güvenlik Raporu</span>
+                    <a class="btn-download" href="/api/v1/reports/export.csv">⬇️ Excel/CSV Olarak İndir</a>
+                </div>
+                <p class="report-description">Aşağıdaki rapor, veritabanındaki tüm log ve alarmları kapsar. Saldırgan grafiği alarm üreten benzersiz logları sayar; CSV dışa aktarımı tüm saldırganları içerir.</p>
+                <div class="report-stats">
+                    <div class="stat-card">
+                        <span class="report-stat-label">TOPLAM LOG</span>
+                        <span class="stat-value" id="report-total-logs">—</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="report-stat-label">ALARM ÜRETEN LOG</span>
+                        <span class="stat-value" id="report-threat-logs">—</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="report-stat-label">TOPLAM ALARM</span>
+                        <span class="stat-value" id="report-total-alerts">—</span>
+                    </div>
+                </div>
+                <div class="report-charts">
+                    <section class="panel chart-panel">
+                        <h3>En Çok Saldıran IP'ler (Top 8)</h3>
+                        <div class="chart-content">
+                            <canvas id="attackers-chart" role="img" aria-label="En çok saldıran IP adreslerinin pasta grafiği"></canvas>
+                            <ul id="attackers-legend" class="chart-legend"></ul>
+                        </div>
+                    </section>
+                    <section class="panel chart-panel">
+                        <h3>En Çok Denenen Zafiyet Türleri</h3>
+                        <div class="chart-content">
+                            <canvas id="vulnerabilities-chart" role="img" aria-label="Deneme türlerinin pasta grafiği"></canvas>
+                            <ul id="vulnerabilities-legend" class="chart-legend"></ul>
+                        </div>
+                    </section>
+                </div>
+                <section class="file-reports-section">
+                    <div class="panel-header">
+                        <span>📂 Yüklenen Dosyaların Ayrıntıları</span>
+                        <span id="file-report-count" class="report-description"></span>
+                    </div>
+                    <div id="file-reports" class="file-reports">
+                        <div class="report-empty">Dosya raporu yükleniyor...</div>
+                    </div>
+                </section>
+                <div id="report-message" class="report-message" role="status"></div>
+            </div>
+        </div>
+        <div id="view-tail" class="view-section">
+            <div class="panel tail-panel">
+                <div class="panel-header">
+                    <span>📡 Gerçek Zamanlı Log Dosyası İzleme</span>
+                    <span id="tail-state" class="tail-state">İzleme kapalı</span>
+                </div>
+                <p class="report-description">
+                    Sunucunun erişebildiği Apache/Nginx log dosyasının mutlak yolunu girin.
+                    Başlatıldığında mevcut tamamlanmış satırlar işlenir, sonra dosya her saniye kontrol edilir.
+                    Proje açılışında otomatik izleme yapılmaz.
+                </p>
+                <form id="tail-form" class="tail-form">
+                    <label for="tail-file-path">Log dosyasının tam yolu</label>
+                    <input id="tail-file-path" name="file_path" type="text" required
+                           placeholder="Örn: C:\nginx\logs\access.log veya /var/log/nginx/access.log"
+                           autocomplete="off">
+                    <div class="tail-actions">
+                        <button id="tail-start" type="submit">▶️ İzlemeyi Başlat</button>
+                        <button id="tail-stop" type="button" class="btn-danger-outline" onclick="stopLiveMonitor()" disabled>⏹ İzlemeyi Durdur</button>
+                    </div>
+                </form>
+                <div id="tail-error" class="tail-error" role="alert"></div>
+                <div class="tail-metrics">
+                    <div><span>İşlenen satır</span><strong id="tail-processed">0</strong></div>
+                    <div><span>Hatalı satır</span><strong id="tail-invalid">0</strong></div>
+                    <div><span>Son tarama</span><strong id="tail-last-scan">Henüz taranmadı</strong></div>
+                </div>
+                <div id="tail-completion" class="tail-completion" hidden>
+                    <div>
+                        <strong>Dosya izleme tamamlandı</strong>
+                        <p id="tail-completion-summary"></p>
+                    </div>
+                    <button type="button" class="btn-download" onclick="openTailReport()">📊 Raporu Görüntüle</button>
+                </div>
+                <p class="tail-hint">Desteklenen uzantılar: .log, .jsonl, .txt. Dosya, uygulamanın çalıştığı bilgisayardan okunur.</p>
             </div>
         </div>
     </div>
