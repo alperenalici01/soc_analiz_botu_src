@@ -1,11 +1,16 @@
 let totalScans = 0;
 let totalThreats = 0;
+let latestReport = null;
+let liveMonitorTimer = null;
+let lastMonitorProcessedCount = null;
+const chartColors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
 
 document.addEventListener('DOMContentLoaded', initializeDashboard);
 
 async function initializeDashboard() {
     await fetchLogsFromDB(true);
     fetchRules();
+    fetchLiveMonitorStatus();
 }
 
 async function loadDemoLogs() {
@@ -16,9 +21,28 @@ async function loadDemoLogs() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Demo logları yüklenemedi.');
         await fetchLogsFromDB(true);
+        await fetchReport();
         alert(`${data.processed} demo logu işlendi, ${data.invalid} satır atlandı. Demo daha önce yüklendiyse yeni kayıt eklenmez.`);
     } catch (error) {
         alert(`Demo logları yüklenemedi: ${error.message}`);
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function resetTestData() {
+    if (!window.confirm('Tüm logları, alarmları ve dosya tarama geçmişini silmek istediğinize emin misiniz? Kullanıcılar ve roller korunur.')) return;
+    const button = document.querySelector('button[onclick="resetTestData()"]');
+    if (button) button.disabled = true;
+    try {
+        const response = await fetch('/api/v1/data/reset/', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `Sıfırlama API HTTP ${response.status}`);
+        await fetchLogsFromDB(true);
+        await fetchReport();
+        alert(`${result.deleted_logs} log, ${result.deleted_alerts} alarm ve ${result.deleted_checkpoints} dosya tarama kaydı silindi. Demo Logları Yükle ile örnek verileri yeniden ekleyebilirsiniz.`);
+    } catch (error) {
+        alert(`Test verileri sıfırlanamadı: ${error.message}`);
     } finally {
         if (button) button.disabled = false;
     }
@@ -45,7 +69,327 @@ function switchTab(tabName) {
 
     if (tabName === 'db') fetchLogsFromDB();
     if (tabName === 'rules') fetchRules();
+    if (tabName === 'reports') fetchReport();
+    if (tabName === 'tail') fetchLiveMonitorStatus();
 }
+
+document.getElementById('tail-form').addEventListener('submit', startLiveMonitor);
+
+async function startLiveMonitor(event) {
+    event.preventDefault();
+    const pathInput = document.getElementById('tail-file-path');
+    const startButton = document.getElementById('tail-start');
+    const errorBox = document.getElementById('tail-error');
+    errorBox.textContent = '';
+    startButton.disabled = true;
+    try {
+        const response = await fetch('/api/v1/live-monitor/start/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file_path: pathInput.value.trim() })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `İzleme başlatılamadı (HTTP ${response.status})`);
+        pathInput.value = result.file_path || pathInput.value;
+        document.getElementById('tail-completion').hidden = true;
+        renderLiveMonitorStatus(result);
+        beginLiveMonitorPolling(result.processed);
+    } catch (error) {
+        errorBox.textContent = error.message;
+    } finally {
+        startButton.disabled = false;
+    }
+}
+
+async function stopLiveMonitor() {
+    const errorBox = document.getElementById('tail-error');
+    errorBox.textContent = '';
+    try {
+        const response = await fetch('/api/v1/live-monitor/stop/', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `İzleme durdurulamadı (HTTP ${response.status})`);
+        renderLiveMonitorStatus(result);
+        showTailCompletion(result);
+        endLiveMonitorPolling();
+    } catch (error) {
+        errorBox.textContent = error.message;
+    }
+}
+
+function showTailCompletion(status) {
+    const completion = document.getElementById('tail-completion');
+    const fileName = status.file_path
+        ? status.file_path.split(/[\\/]/).pop()
+        : 'seçilen dosya';
+    document.getElementById('tail-completion-summary').textContent =
+        `${fileName}: ${status.processed} satır işlendi, ${status.invalid} hatalı satır atlandı. Rapor ve dosya ayrıntılarını görmek için rapor sayfasına geçin.`;
+    completion.hidden = false;
+}
+
+function openTailReport() {
+    switchTab('reports');
+}
+
+async function fetchLiveMonitorStatus() {
+    try {
+        const response = await fetch('/api/v1/live-monitor/status/');
+        const status = await response.json();
+        if (!response.ok) throw new Error(status.detail || `İzleme durumu alınamadı (HTTP ${response.status})`);
+        renderLiveMonitorStatus(status);
+        if (status.active) beginLiveMonitorPolling();
+        else {
+            endLiveMonitorPolling();
+            if (status.state === 'stopped' && status.file_path && status.last_scan) {
+                showTailCompletion(status);
+            }
+        }
+    } catch (error) {
+        document.getElementById('tail-error').textContent = error.message;
+    }
+}
+
+function renderLiveMonitorStatus(status) {
+    const state = document.getElementById('tail-state');
+    const stateLabels = {
+        starting: 'Başlatılıyor…',
+        running: '🟢 İzleniyor',
+        stopped: 'İzleme kapalı',
+        error: '🔴 Hata'
+    };
+    state.textContent = stateLabels[status.state] || 'İzleme kapalı';
+    state.classList.toggle('active', Boolean(status.active));
+    document.getElementById('tail-start').disabled = Boolean(status.active);
+    document.getElementById('tail-stop').disabled = !status.active;
+    document.getElementById('tail-processed').textContent = status.processed.toLocaleString('tr-TR');
+    document.getElementById('tail-invalid').textContent = status.invalid.toLocaleString('tr-TR');
+    document.getElementById('tail-last-scan').textContent = status.last_scan
+        ? new Date(status.last_scan).toLocaleString('tr-TR')
+        : 'Henüz taranmadı';
+    if (status.file_path) document.getElementById('tail-file-path').value = status.file_path;
+    if (status.error) document.getElementById('tail-error').textContent = status.error;
+}
+
+function beginLiveMonitorPolling(processedCount = null) {
+    if (liveMonitorTimer !== null) return;
+    lastMonitorProcessedCount = processedCount;
+    liveMonitorTimer = window.setInterval(pollLiveMonitor, 1500);
+}
+
+function endLiveMonitorPolling() {
+    if (liveMonitorTimer !== null) window.clearInterval(liveMonitorTimer);
+    liveMonitorTimer = null;
+    lastMonitorProcessedCount = null;
+}
+
+async function pollLiveMonitor() {
+    try {
+        const response = await fetch('/api/v1/live-monitor/status/');
+        const status = await response.json();
+        if (!response.ok) throw new Error(status.detail || `İzleme durumu alınamadı (HTTP ${response.status})`);
+        renderLiveMonitorStatus(status);
+        if (lastMonitorProcessedCount !== null && status.processed > lastMonitorProcessedCount) {
+            await fetchLogsFromDB(true);
+            await fetchReport();
+        }
+        lastMonitorProcessedCount = status.processed;
+        if (!status.active) {
+            if (status.state === 'stopped' && status.file_path && status.last_scan) {
+                showTailCompletion(status);
+            }
+            endLiveMonitorPolling();
+        }
+    } catch (error) {
+        document.getElementById('tail-error').textContent = error.message;
+        endLiveMonitorPolling();
+    }
+}
+
+async function fetchReport() {
+    const message = document.getElementById('report-message');
+    message.textContent = 'Rapor verileri yükleniyor...';
+    message.classList.remove('error');
+    try {
+        const response = await fetch('/api/v1/reports/');
+        const report = await response.json();
+        if (!response.ok) throw new Error(report.detail || `Rapor API HTTP ${response.status}`);
+        latestReport = report;
+        document.getElementById('report-total-logs').textContent = report.total_logs.toLocaleString('tr-TR');
+        document.getElementById('report-threat-logs').textContent = report.threat_logs.toLocaleString('tr-TR');
+        document.getElementById('report-total-alerts').textContent = report.total_alerts.toLocaleString('tr-TR');
+        renderPieChart(
+            'attackers-chart',
+            'attackers-legend',
+            report.top_attackers,
+            'source_ip',
+            'Saldırgan IP bulunamadı.'
+        );
+        renderPieChart(
+            'vulnerabilities-chart',
+            'vulnerabilities-legend',
+            report.vulnerability_types,
+            'alert_type',
+            'Tespit edilmiş alarm türü bulunamadı.'
+        );
+        renderImportedFiles(report.imported_files || []);
+        message.textContent = '';
+    } catch (error) {
+        latestReport = null;
+        renderImportedFiles([]);
+        message.textContent = `Rapor verileri yüklenemedi: ${error.message}`;
+        message.classList.add('error');
+    }
+}
+
+function renderImportedFiles(files) {
+    const container = document.getElementById('file-reports');
+    const count = document.getElementById('file-report-count');
+    container.replaceChildren();
+    count.textContent = `${files.length} dosya`;
+    if (!files.length) {
+        const empty = document.createElement('div');
+        empty.className = 'report-empty';
+        empty.textContent = 'Henüz dosya yüklenmemiş. Canlı Analiz Paneli üzerinden bir log/JSON dosyası seçin veya demo loglarını yükleyin.';
+        container.appendChild(empty);
+        return;
+    }
+
+    for (const file of files) {
+        const fileSection = document.createElement('details');
+        fileSection.className = 'file-report';
+        const fileSummary = document.createElement('summary');
+        fileSummary.textContent = `${file.file_name} — ${file.total_logs} kayıt, ${file.threat_logs} alarm üreten log, ${file.total_alerts} alarm`;
+        fileSection.appendChild(fileSummary);
+
+        const sourcePath = document.createElement('p');
+        sourcePath.className = 'file-source-path';
+        sourcePath.textContent = file.source_file;
+        fileSection.appendChild(sourcePath);
+
+        const breakdown = document.createElement('div');
+        breakdown.className = 'file-breakdown';
+        breakdown.appendChild(createReportBreakdown('Saldırgan IP', file.top_attackers, 'source_ip'));
+        breakdown.appendChild(createReportBreakdown('Alarm türleri', file.vulnerability_types, 'alert_type'));
+        fileSection.appendChild(breakdown);
+
+        const logTable = document.createElement('div');
+        logTable.className = 'file-log-list';
+        for (const log of file.logs) {
+            const logSection = document.createElement('details');
+            logSection.className = 'file-log-entry';
+            const logSummary = document.createElement('summary');
+            const timestamp = log.timestamp ? new Date(log.timestamp).toLocaleString('tr-TR') : 'Zaman bilinmiyor';
+            logSummary.textContent = `${timestamp} | ${log.source_ip || '-'} | ${log.http_method || '-'} ${log.endpoint || '-'} | HTTP ${log.status_code ?? '-'}`;
+            logSection.appendChild(logSummary);
+
+            const fields = document.createElement('dl');
+            fields.className = 'file-log-fields';
+            const values = [
+                ['Kaynak IP', log.source_ip || '-'],
+                ['Metot', log.http_method || '-'],
+                ['Hedef', log.endpoint || '-'],
+                ['Durum kodu', log.status_code ?? '-'],
+                ['Payload', log.payload_data || '-'],
+                ['Ham satır', log.raw_line || '-']
+            ];
+            for (const [label, value] of values) {
+                const row = document.createElement('div');
+                const term = document.createElement('dt');
+                const description = document.createElement('dd');
+                term.textContent = label;
+                description.textContent = String(value);
+                row.append(term, description);
+                fields.appendChild(row);
+            }
+            logSection.appendChild(fields);
+
+            const alerts = document.createElement('p');
+            alerts.className = 'file-log-alerts';
+            alerts.textContent = log.alerts.length
+                ? `Alarmlar: ${log.alerts.map(alert => `${alert.alert_type} (${alert.severity_level})`).join(', ')}`
+                : 'Bu kayıt için alarm üretilmedi.';
+            logSection.appendChild(alerts);
+            logTable.appendChild(logSection);
+        }
+        fileSection.appendChild(logTable);
+        container.appendChild(fileSection);
+    }
+}
+
+function createReportBreakdown(title, items, labelKey) {
+    const section = document.createElement('section');
+    const heading = document.createElement('h4');
+    heading.textContent = title;
+    section.appendChild(heading);
+    const list = document.createElement('ul');
+    if (!items.length) {
+        const empty = document.createElement('li');
+        empty.textContent = 'Veri yok';
+        list.appendChild(empty);
+    } else {
+        for (const item of items) {
+            const row = document.createElement('li');
+            row.textContent = `${item[labelKey]}: ${item.count}`;
+            list.appendChild(row);
+        }
+    }
+    section.appendChild(list);
+    return section;
+}
+
+function renderPieChart(canvasId, legendId, entries, labelKey, emptyMessage) {
+    const canvas = document.getElementById(canvasId);
+    const legend = document.getElementById(legendId);
+    const context = canvas.getContext('2d');
+    const pixelRatio = window.devicePixelRatio || 1;
+    const bounds = canvas.getBoundingClientRect();
+    const width = Math.max(bounds.width, 240);
+    const height = 240;
+    canvas.width = width * pixelRatio;
+    canvas.height = height * pixelRatio;
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, width, height);
+    legend.replaceChildren();
+
+    const total = entries.reduce((sum, entry) => sum + entry.count, 0);
+    if (!total) {
+        const empty = document.createElement('li');
+        empty.className = 'chart-empty';
+        empty.textContent = emptyMessage;
+        legend.appendChild(empty);
+        return;
+    }
+
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.min(width, height) / 2 - 8;
+    let startAngle = -Math.PI / 2;
+    entries.forEach((entry, index) => {
+        const sliceAngle = entry.count / total * Math.PI * 2;
+        const color = chartColors[index % chartColors.length];
+        context.beginPath();
+        context.moveTo(centerX, centerY);
+        context.arc(centerX, centerY, radius, startAngle, startAngle + sliceAngle);
+        context.closePath();
+        context.fillStyle = color;
+        context.fill();
+        startAngle += sliceAngle;
+
+        const item = document.createElement('li');
+        const swatch = document.createElement('span');
+        const label = document.createElement('span');
+        swatch.className = 'chart-swatch';
+        swatch.style.backgroundColor = color;
+        label.textContent = `${entry[labelKey]} — ${entry.count.toLocaleString('tr-TR')} (${(entry.count / total * 100).toFixed(1)}%)`;
+        item.append(swatch, label);
+        legend.appendChild(item);
+    });
+}
+
+window.addEventListener('resize', () => {
+    if (!latestReport || !document.getElementById('view-reports').classList.contains('active')) return;
+    renderPieChart('attackers-chart', 'attackers-legend', latestReport.top_attackers, 'source_ip', 'Saldırgan IP bulunamadı.');
+    renderPieChart('vulnerabilities-chart', 'vulnerabilities-legend', latestReport.vulnerability_types, 'alert_type', 'Tespit edilmiş alarm türü bulunamadı.');
+});
 
 // -----------------------------------------
 // DB GEÇMİŞİ VE İNCELEME MANTIĞI
@@ -208,21 +552,23 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
                 const response = await fetch('/api/v1/ingest-text/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content })
+                    body: JSON.stringify({ content, source_file: file.name })
                 });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.detail || 'Log dosyası işlenemedi.');
                 data.results.forEach(result => renderAnalysisResult(result.log, result));
+                await fetchReport();
                 if (data.errors.length) {
                     alert(`${data.processed} satır işlendi; ${data.errors.length} hatalı satır var. İlk hata (${data.errors[0].line}. satır): ${data.errors[0].error}`);
                 }
             } else {
                 const parsedData = JSON.parse(content);
                 if (Array.isArray(parsedData)) {
-                    for (const log of parsedData) await sendToBackend(log);
+                    for (const log of parsedData) await sendToBackend(log, file.name);
                 } else {
-                    await sendToBackend(parsedData);
+                    await sendToBackend(parsedData, file.name);
                 }
+                await fetchReport();
             }
         } catch (error) {
             alert(`Dosya analiz edilemedi: ${error.message}`);
@@ -243,15 +589,17 @@ async function analyzeManualData() {
         } else {
             await sendToBackend(parsedLog);
         }
+        await fetchReport();
     } catch (e) { alert("HATA: Kutuya geçerli bir JSON yapıştırın!"); }
 }
 
-async function sendToBackend(logObject) {
+async function sendToBackend(logObject, sourceFile = null) {
+    const requestData = sourceFile ? { ...logObject, source_file: sourceFile } : logObject;
     try {
         const response = await fetch('/api/v1/analyze-log/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(logObject)
+            body: JSON.stringify(requestData)
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Log API tarafından kabul edilmedi.');

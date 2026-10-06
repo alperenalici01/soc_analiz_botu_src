@@ -1,6 +1,7 @@
-from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
+
+from pydantic import BaseModel
 
 # Dışarıdan gelecek API log isteğinin iskeleti
 class APILogCreate(BaseModel):
@@ -10,6 +11,7 @@ class APILogCreate(BaseModel):
     http_method: str
     status_code: int
     payload_data: Optional[str] = ""
+    source_file: Optional[str] = None
 
 # Botun tespit ettiği zafiyetin dışa vurum (yanıt) iskeleti
 class SecurityAlertResponse(BaseModel):
@@ -19,9 +21,11 @@ class SecurityAlertResponse(BaseModel):
     severity_level: str
     is_resolved: bool = False
 
-    class Config:
-        from_attributes = True # SQLAlchemy (Veritabanı) objelerini otomatik JSON'a çevirmek için gerekli
-
 
 class TextLogIngest(BaseModel):
     content: str
+    source_file: Optional[str] = None
+
+
+class LiveLogStart(BaseModel):
+    file_path: str
