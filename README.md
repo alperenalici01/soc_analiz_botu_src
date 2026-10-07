@@ -26,7 +26,7 @@ Uygulama ilk açıldığında veritabanı tabloları oluşturulur ve eksik varsa
 - **Geçmiş Kayıtlar (DB):** En son log kayıtlarını ve payload ayrıntılarını görüntüleyin.
 - **Kural Motoru Ayarları:** Etkin tespit imzalarını görün ve yeni imza ekleyin. Eklenen imzalar yalnızca çalışan sunucu süreci boyunca bellekte tutulur.
 - **Raporlama Çıktıları:** Toplam log ve alarm sayılarını, alarm üreten loglara göre en çok saldıran IP'leri ve alarm türlerini pasta grafikleriyle inceleyin. Kaynak dosyası bulunan loglar için dosya adı/yolu, istek alanları, payload veya ham satır ve alarmlar ayrı ayrı gösterilir. **Excel/CSV Olarak İndir** rapor özetini ve dosya kayıtlarını indirir.
-- **Canlı Dosya Dinleme:** Sunucunun erişebildiği bir `.log`, `.jsonl` veya `.txt` dosyasının mutlak yolunu girip izlemeyi elle başlatın/durdurun. İlk kez izlenen dosyanın tamamlanmış satırları okunur; imleç veritabanında saklandığından aynı dosya sonraki başlatmalarda kaldığı yerden devam eder. Dosyaya eklenen yeni tamamlanmış satırlar işlenir. Aynı anda tek dosya izlenir. Uygulama kapanınca izleme durur ve yeniden açılışta kendiliğinden başlamaz.
+- **Canlı Dosya Dinleme:** Sunucunun erişebildiği `.log`, `.jsonl` veya `.txt` dosyalarının mutlak yollarını satır başına bir tane girip izlemeyi elle başlatın/durdurun. Dosyalar ayrı asenkron görevlerde izlenir. İlk kez izlenen dosyanın tamamlanmış satırları okunur; imleç veritabanında saklandığından sonraki başlatmalarda kaldığı yerden devam edilir. Uygulama kapanınca izleme durur ve yeniden açılışta kendiliğinden başlamaz.
 
 Canlı izleme durdurulduğunda **Raporu Görüntüle** düğmesi ilgili rapor sayfasına geçiş sağlar.
 
@@ -70,7 +70,7 @@ Canlı Analiz Paneli'ndeki **Demo Logları Yükle** düğmesi `dummy_data/server
 
 Canlı eklemeyi simüle etmek için:
 
-1. Canlı Dosya Dinleme sekmesinde `dummy_data/live_tail_demo.log` dosyasının mutlak yolunu girip izlemeyi başlatın.
+1. Canlı Dosya Dinleme sekmesinde izlemek istediğiniz dosyaların mutlak yollarını satır başına bir tane girip izlemeyi başlatın. Örnek: `dummy_data/live_tail_demo.log`.
 2. Başka bir PowerShell penceresinden dosyaya yeni tamamlanmış satır ekleyin:
 
 ```powershell
@@ -109,8 +109,19 @@ Varsayılan veritabanı proje klasöründeki `threat_hunter.db` SQLite dosyasıd
 | `GET` | `/api/v1/rules/` | Etkin imza ve SQL hata kurallarını listeler |
 | `POST` | `/api/v1/rules/` | Çalışan süreç için imza ekler |
 | `GET` | `/api/v1/live-monitor/status/` | Canlı izleme durumunu döndürür |
-| `POST` | `/api/v1/live-monitor/start/` | Mutlak dosya yolu ile canlı izlemeyi başlatır |
+| `POST` | `/api/v1/live-monitor/start/` | `file_paths` listesiyle (tek dosyada eski `file_path` alanı da desteklenir) izlemeyi başlatır |
 | `POST` | `/api/v1/live-monitor/stop/` | Canlı izlemeyi durdurur |
+
+Çoklu dosya başlatma isteği örneği:
+
+```json
+{
+  "file_paths": [
+    "C:\\nginx\\logs\\access.log",
+    "C:\\apache\\logs\\access.log"
+  ]
+}
+```
 
 ## Testler
 

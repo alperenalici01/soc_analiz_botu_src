@@ -1,8 +1,9 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Iterable, TypedDict
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -13,6 +14,40 @@ from models.database import FileCheckpoint, SessionLocal
 
 
 logger = logging.getLogger(__name__)
+
+
+class FileMonitorStatus(TypedDict):
+    file_path: str
+    active: bool
+    state: str
+    last_scan: str | None
+    processed: int
+    invalid: int
+    error: str | None
+
+
+class LiveMonitorStatus(TypedDict):
+    active: bool
+    state: str
+    file_path: str | None
+    file_paths: list[str]
+    last_scan: str | None
+    processed: int
+    invalid: int
+    error: str | None
+    files: list[FileMonitorStatus]
+    poll_interval_seconds: float
+
+
+@dataclass
+class MonitoredFile:
+    path: Path
+    task: asyncio.Task | None = None
+    state: str = "starting"
+    last_scan: str | None = None
+    processed: int = 0
+    invalid: int = 0
+    error: str | None = None
 
 
 def scan_log_file(path: Path) -> Dict[str, int]:
@@ -82,68 +117,102 @@ def scan_log_file(path: Path) -> Dict[str, int]:
 class LiveLogMonitor:
     def __init__(self, poll_interval_seconds: float = LIVE_LOG_POLL_INTERVAL_SECONDS):
         self.poll_interval_seconds = poll_interval_seconds
-        self.path: Path | None = None
-        self.task: asyncio.Task | None = None
-        self.state = "stopped"
-        self.last_scan: str | None = None
-        self.processed = 0
-        self.invalid = 0
-        self.error: str | None = None
+        self.files: Dict[str, MonitoredFile] = {}
 
-    def get_status(self) -> Dict[str, object]:
-        active = self.task is not None and not self.task.done()
+    def get_status(self) -> LiveMonitorStatus:
+        file_statuses = []
+        for monitored in self.files.values():
+            active = monitored.task is not None and not monitored.task.done()
+            file_status: FileMonitorStatus = {
+                "file_path": str(monitored.path),
+                "active": active,
+                "state": monitored.state,
+                "last_scan": monitored.last_scan,
+                "processed": monitored.processed,
+                "invalid": monitored.invalid,
+                "error": monitored.error,
+            }
+            file_statuses.append(file_status)
+        active = any(file_status["active"] for file_status in file_statuses)
+        states = {file_status["state"] for file_status in file_statuses}
+        if "error" in states:
+            state = "error"
+        elif "starting" in states and active:
+            state = "starting"
+        elif active:
+            state = "running"
+        else:
+            state = "stopped"
+        errors = [
+            f"{file_status['file_path']}: {file_status['error']}"
+            for file_status in file_statuses
+            if file_status["error"]
+        ]
+        last_scans = [file_status["last_scan"] for file_status in file_statuses if file_status["last_scan"]]
         return {
             "active": active,
-            "state": self.state,
-            "file_path": str(self.path) if self.path else None,
-            "last_scan": self.last_scan,
-            "processed": self.processed,
-            "invalid": self.invalid,
-            "error": self.error,
+            "state": state,
+            "file_path": file_statuses[0]["file_path"] if len(file_statuses) == 1 else None,
+            "file_paths": [file_status["file_path"] for file_status in file_statuses],
+            "last_scan": max(last_scans) if last_scans else None,
+            "processed": sum(file_status["processed"] for file_status in file_statuses),
+            "invalid": sum(file_status["invalid"] for file_status in file_statuses),
+            "error": "; ".join(errors) if errors else None,
+            "files": file_statuses,
             "poll_interval_seconds": self.poll_interval_seconds,
         }
 
-    async def start(self, path: Path) -> Dict[str, object]:
-        if self.task is not None and not self.task.done():
+    async def start(self, paths: Path | Iterable[Path]) -> LiveMonitorStatus:
+        if any(item.task is not None and not item.task.done() for item in self.files.values()):
             raise RuntimeError("A live log file is already being monitored.")
 
-        self.path = path.resolve(strict=True)
-        self.processed = 0
-        self.invalid = 0
-        self.last_scan = None
-        self.error = None
-        self.state = "starting"
-        self.task = asyncio.create_task(self._watch_file())
+        if isinstance(paths, Path):
+            paths = [paths]
+        unique_paths = {}
+        for path in paths:
+            resolved_path = path.resolve(strict=True)
+            unique_paths[str(resolved_path)] = resolved_path
+        if not unique_paths:
+            raise ValueError("At least one log file path is required.")
+        self.files = {
+            key: MonitoredFile(path=path)
+            for key, path in unique_paths.items()
+        }
+        for monitored in self.files.values():
+            monitored.task = asyncio.create_task(self._watch_file(monitored))
         return self.get_status()
 
-    async def stop(self) -> Dict[str, object]:
-        task = self.task
-        if task is not None and not task.done():
+    async def stop(self) -> LiveMonitorStatus:
+        tasks = [
+            monitored.task
+            for monitored in self.files.values()
+            if monitored.task is not None and not monitored.task.done()
+        ]
+        for task in tasks:
             task.cancel()
+        for task in tasks:
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        self.task = None
-        if self.state != "error":
-            self.state = "stopped"
         return self.get_status()
 
-    async def _watch_file(self) -> None:
+    async def _watch_file(self, monitored: MonitoredFile) -> None:
         try:
-            while self.path is not None:
+            while True:
                 try:
-                    result = await asyncio.to_thread(scan_log_file, self.path)
+                    result = await asyncio.to_thread(scan_log_file, monitored.path)
                 except (OSError, SQLAlchemyError) as error:
-                    logger.exception("Live log scan failed for %s", self.path)
-                    self.error = str(error)
-                    self.state = "error"
+                    logger.exception("Live log scan failed for %s", monitored.path)
+                    monitored.error = str(error)
+                    monitored.state = "error"
                     return
-                self.processed += result["processed"]
-                self.invalid += result["invalid"]
-                self.last_scan = datetime.now(timezone.utc).isoformat()
-                self.state = "running"
+                monitored.processed += result["processed"]
+                monitored.invalid += result["invalid"]
+                monitored.last_scan = datetime.now(timezone.utc).isoformat()
+                monitored.state = "running"
                 await asyncio.sleep(self.poll_interval_seconds)
         except asyncio.CancelledError:
-            self.state = "stopped"
+            if monitored.state != "error":
+                monitored.state = "stopped"
             raise

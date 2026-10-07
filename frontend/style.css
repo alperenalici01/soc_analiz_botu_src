@@ -110,6 +110,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .tail-form { display: flex; flex-direction: column; gap: 10px; }
 .tail-form label { color: var(--text-muted); font-size: 0.9rem; }
 .tail-form input { box-sizing: border-box; width: 100%; background: #0b1120; color: var(--text-main); border: 1px solid var(--border); padding: 12px; border-radius: 6px; font-family: monospace; }
+.tail-form textarea { box-sizing: border-box; flex: initial; width: 100%; min-height: 110px; margin: 0; resize: vertical; }
 .tail-actions { display: flex; gap: 10px; }
 .tail-actions button { width: auto; margin: 0; }
 .tail-actions .btn-danger-outline { padding: 12px 18px; }
@@ -118,6 +119,11 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .tail-metrics > div { display: flex; flex-direction: column; gap: 8px; padding: 16px; background: #0b1120; border: 1px solid var(--border); border-radius: 6px; }
 .tail-metrics span, .tail-hint { color: var(--text-muted); font-size: 0.85rem; }
 .tail-metrics strong { font: 1.25rem monospace; overflow-wrap: anywhere; }
+.tail-files { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tail-files li { display: flex; flex-direction: column; gap: 5px; padding: 12px; background: #0b1120; border: 1px solid var(--border); border-radius: 6px; }
+.tail-files code { overflow-wrap: anywhere; color: var(--text-main); }
+.tail-files li > span { color: var(--text-muted); font-size: 0.85rem; }
+.tail-files li > .tail-file-error { color: var(--danger); }
 .tail-hint { margin: 0; }
 .tail-completion { display: flex; align-items: flex-start; flex-direction: column; gap: 14px; padding: 16px 18px; background: rgba(16, 185, 129, 0.08); border: 1px solid var(--success); border-radius: 8px; }
 .tail-completion[hidden] { display: none; }
