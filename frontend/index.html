@@ -184,18 +184,18 @@
                     <span id="tail-state" class="tail-state">İzleme kapalı</span>
                 </div>
                 <p class="report-description">
-                    Sunucunun erişebildiği Apache/Nginx log dosyasının mutlak yolunu girin.
-                    Başlatıldığında mevcut tamamlanmış satırlar işlenir, sonra dosya her saniye kontrol edilir.
+                    Sunucunun erişebildiği Apache/Nginx log dosyalarının mutlak yollarını her satıra bir tane gelecek şekilde girin.
+                    Başlatıldığında dosyaların tamamlanmış satırları işlenir ve dosyalar her saniye kontrol edilir.
                     Proje açılışında otomatik izleme yapılmaz.
                 </p>
                 <form id="tail-form" class="tail-form">
-                    <label for="tail-file-path">Log dosyasının tam yolu</label>
-                    <input id="tail-file-path" name="file_path" type="text" required
-                           placeholder="Örn: C:\nginx\logs\access.log veya /var/log/nginx/access.log"
-                           autocomplete="off">
+                    <label for="tail-file-path">Log dosyalarının tam yolları (satır başına bir dosya)</label>
+                    <textarea id="tail-file-path" name="file_paths" rows="4" required
+                              placeholder="Örnek: C:\nginx\logs\access.log&#10;C:\apache\logs\access.log"
+                              autocomplete="off"></textarea>
                     <div class="tail-actions">
                         <button id="tail-start" type="submit">▶️ İzlemeyi Başlat</button>
-                        <button id="tail-stop" type="button" class="btn-danger-outline" onclick="stopLiveMonitor()" disabled>⏹ İzlemeyi Durdur</button>
+                        <button id="tail-stop" type="button" class="btn-danger-outline" onclick="stopLiveMonitor()" disabled>⏹ Tüm İzlemeleri Durdur</button>
                     </div>
                 </form>
                 <div id="tail-error" class="tail-error" role="alert"></div>
@@ -204,6 +204,7 @@
                     <div><span>Hatalı satır</span><strong id="tail-invalid">0</strong></div>
                     <div><span>Son tarama</span><strong id="tail-last-scan">Henüz taranmadı</strong></div>
                 </div>
+                <ul id="tail-files" class="tail-files" aria-live="polite"></ul>
                 <div id="tail-completion" class="tail-completion" hidden>
                     <div>
                         <strong>Dosya izleme tamamlandı</strong>

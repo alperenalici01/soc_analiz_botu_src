@@ -80,17 +80,18 @@ async function startLiveMonitor(event) {
     const pathInput = document.getElementById('tail-file-path');
     const startButton = document.getElementById('tail-start');
     const errorBox = document.getElementById('tail-error');
+    const filePaths = pathInput.value.split(/\r?\n/).map(path => path.trim()).filter(Boolean);
     errorBox.textContent = '';
     startButton.disabled = true;
     try {
         const response = await fetch('/api/v1/live-monitor/start/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ file_path: pathInput.value.trim() })
+            body: JSON.stringify({ file_paths: filePaths })
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || `İzleme başlatılamadı (HTTP ${response.status})`);
-        pathInput.value = result.file_path || pathInput.value;
+        pathInput.value = (result.file_paths || filePaths).join('\n');
         document.getElementById('tail-completion').hidden = true;
         renderLiveMonitorStatus(result);
         beginLiveMonitorPolling(result.processed);
@@ -118,11 +119,11 @@ async function stopLiveMonitor() {
 
 function showTailCompletion(status) {
     const completion = document.getElementById('tail-completion');
-    const fileName = status.file_path
-        ? status.file_path.split(/[\\/]/).pop()
-        : 'seçilen dosya';
+    const filePaths = status.file_paths || (status.file_path ? [status.file_path] : []);
+    const fileNames = filePaths.map(path => path.split(/[\\/]/).pop());
+    const fileLabel = fileNames.length ? fileNames.join(', ') : 'seçilen dosyalar';
     document.getElementById('tail-completion-summary').textContent =
-        `${fileName}: ${status.processed} satır işlendi, ${status.invalid} hatalı satır atlandı. Rapor ve dosya ayrıntılarını görmek için rapor sayfasına geçin.`;
+        `${fileLabel}: toplam ${status.processed} satır işlendi, ${status.invalid} hatalı satır atlandı. Rapor ve dosya ayrıntılarını görmek için rapor sayfasına geçin.`;
     completion.hidden = false;
 }
 
@@ -139,7 +140,7 @@ async function fetchLiveMonitorStatus() {
         if (status.active) beginLiveMonitorPolling();
         else {
             endLiveMonitorPolling();
-            if (status.state === 'stopped' && status.file_path && status.last_scan) {
+            if (status.state === 'stopped' && (status.file_paths || status.file_path) && status.last_scan) {
                 showTailCompletion(status);
             }
         }
@@ -165,7 +166,26 @@ function renderLiveMonitorStatus(status) {
     document.getElementById('tail-last-scan').textContent = status.last_scan
         ? new Date(status.last_scan).toLocaleString('tr-TR')
         : 'Henüz taranmadı';
-    if (status.file_path) document.getElementById('tail-file-path').value = status.file_path;
+    const filePaths = status.file_paths || (status.file_path ? [status.file_path] : []);
+    if (filePaths.length) document.getElementById('tail-file-path').value = filePaths.join('\n');
+    const fileList = document.getElementById('tail-files');
+    fileList.replaceChildren();
+    for (const file of status.files || []) {
+        const item = document.createElement('li');
+        const path = document.createElement('code');
+        path.textContent = file.file_path;
+        const details = document.createElement('span');
+        details.textContent =
+            `${file.state}: ${file.processed.toLocaleString('tr-TR')} işlendi, ${file.invalid.toLocaleString('tr-TR')} hatalı`;
+        item.append(path, details);
+        if (file.error) {
+            const error = document.createElement('span');
+            error.className = 'tail-file-error';
+            error.textContent = file.error;
+            item.appendChild(error);
+        }
+        fileList.appendChild(item);
+    }
     if (status.error) document.getElementById('tail-error').textContent = status.error;
 }
 
@@ -193,7 +213,7 @@ async function pollLiveMonitor() {
         }
         lastMonitorProcessedCount = status.processed;
         if (!status.active) {
-            if (status.state === 'stopped' && status.file_path && status.last_scan) {
+            if (status.state === 'stopped' && (status.file_paths || status.file_path) && status.last_scan) {
                 showTailCompletion(status);
             }
             endLiveMonitorPolling();

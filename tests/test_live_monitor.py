@@ -67,6 +67,30 @@ class LiveLogMonitorTests(unittest.IsolatedAsyncioTestCase):
                     await monitor.start(path)
                 await monitor.stop()
 
+    async def test_monitor_reads_multiple_files_concurrently(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = [Path(temp_dir) / "access-a.log", Path(temp_dir) / "access-b.log"]
+            for index, path in enumerate(paths, start=1):
+                path.write_text(
+                    f'203.0.113.{index} - - [02/Oct/2026:20:10:00 +0300] '
+                    f'"GET /item-{index} HTTP/1.1" 200 10 "-" "test"\n',
+                    encoding="utf-8",
+                )
+            monitor = LiveLogMonitor(poll_interval_seconds=0.02)
+
+            with patch("core.file_monitor.SessionLocal", self.session_factory):
+                status = await monitor.start(paths)
+                self.assertEqual(len(status["files"]), 2)
+                await asyncio.sleep(0.06)
+                status = await monitor.stop()
+
+            self.assertFalse(status["active"])
+            self.assertEqual(status["processed"], 2)
+            self.assertEqual(status["invalid"], 0)
+            self.assertEqual({item["processed"] for item in status["files"]}, {1})
+            with self.session_factory() as db:
+                self.assertEqual(db.query(APILog).count(), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

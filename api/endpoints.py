@@ -39,22 +39,30 @@ def get_live_monitor_status():
 
 @router.post("/live-monitor/start/")
 async def start_live_monitor(request: LiveLogStart):
-    path = Path(request.file_path).expanduser()
-    if not path.is_absolute():
-        raise HTTPException(status_code=422, detail="Log file path must be absolute.")
+    requested_paths = request.file_paths or ([request.file_path] if request.file_path else [])
+    if not requested_paths:
+        raise HTTPException(status_code=422, detail="At least one log file path is required.")
+    paths = []
+    for requested_path in requested_paths:
+        path = Path(requested_path).expanduser()
+        if not path.is_absolute():
+            raise HTTPException(status_code=422, detail=f"Log file path must be absolute: {path}")
+        try:
+            path = path.resolve(strict=True)
+        except OSError as error:
+            raise HTTPException(status_code=404, detail=f"Log file not found: {path}") from error
+        if not path.is_file():
+            raise HTTPException(status_code=400, detail=f"The selected path is not a file: {path}")
+        if path.suffix.lower() not in {".log", ".jsonl", ".txt"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported log file extension: {path}. Use .log, .jsonl, or .txt.",
+            )
+        paths.append(path)
     try:
-        path = path.resolve(strict=True)
-    except OSError as error:
-        raise HTTPException(status_code=404, detail=f"Log file not found: {path}") from error
-    if not path.is_file():
-        raise HTTPException(status_code=400, detail="The selected path is not a file.")
-    if path.suffix.lower() not in {".log", ".jsonl", ".txt"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Supported file extensions are .log, .jsonl, and .txt.",
-        )
-    try:
-        return await live_log_monitor.start(path)
+        return await live_log_monitor.start(paths)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
